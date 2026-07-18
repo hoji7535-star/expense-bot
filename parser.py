@@ -1,45 +1,59 @@
 """
 parser.py — Foydalanuvchi matnidan (yoki ovozdan matnga aylantirilgandan keyin)
-summa va kategoriyani ajratib olish.
+summa, kategoriya va subkategoriyani ajratib olish.
 
 Misollar:
-  "market 50000"            -> 50000, oziq-ovqat
-  "taxi 15 ming"             -> 15000, transport
-  "kino uchun 30000 so'm"    -> 30000, ko'ngilochar
-  "150 ming kiyim oldim"     -> 150000, kiyim-kechak
+  "market 50000"            -> 50000, oziq-ovqat, market/supermarket
+  "taxi 15 ming"             -> 15000, transport, taksi
+  "kino uchun 30000 so'm"    -> 30000, ko'ngilochar, kino/teatr
+  "150 ming kiyim oldim"     -> 150000, kiyim-kechak, kiyim
 """
 import re
 
-# Kategoriya kalit so'zlari (kichik harflarda)
-CATEGORY_KEYWORDS = {
-    "oziq-ovqat": [
-        "market", "oziq", "ovqat", "non", "go'sht", "sabzavot", "meva",
-        "supermarket", "bozor", "produkt", "restoran", "kafe", "osh",
-        "fastfood", "fast food", "choy", "kofe",
-    ],
-    "transport": [
-        "taxi", "taksi", "avtobus", "metro", "yonilg'i", "benzin",
-        "moshina", "mashina", "transport", "yandex", "bolt", "poyezd",
-    ],
-    "kiyim-kechak": [
-        "kiyim", "poyabzal", "krossovka", "futbolka", "shim", "ko'ylak",
-        "kurtka", "sumka",
-    ],
-    "kommunal": [
-        "kommunal", "svet", "elektr", "gaz", "suv", "internet", "wifi",
-        "telefon", "aloqa", "ijara", "kvartira",
-    ],
-    "sog'liq": [
-        "dori", "dorixona", "shifokor", "vrach", "klinika", "kasalxona",
-        "sog'liq", "tibbiyot", "stomatolog",
-    ],
-    "ko'ngilochar": [
-        "kino", "konsert", "o'yin", "oyin", "teatr", "sayohat", "dam olish",
-        "klub", "bar", "sovg'a",
-    ],
-    "ta'lim": [
-        "kitob", "kurs", "ta'lim", "maktab", "universitet", "repetitor",
-    ],
+# Kategoriya -> subkategoriya -> kalit so'zlar (kichik harflarda)
+CATEGORY_TREE = {
+    "oziq-ovqat": {
+        "market/supermarket": ["market", "supermarket", "bozor", "produkt", "do'kon"],
+        "restoran/kafe": ["restoran", "kafe", "osh", "oshxona"],
+        "fastfood": ["fastfood", "fast food", "burger", "pitsa", "shashlik"],
+        "ichimlik": ["choy", "kofe", "coffee", "sув", "sharbat"],
+        "oziq-ovqat (umumiy)": ["oziq", "ovqat", "non", "go'sht", "sabzavot", "meva"],
+    },
+    "transport": {
+        "taksi": ["taxi", "taksi", "yandex", "bolt", "mytaxi"],
+        "jamoat transporti": ["avtobus", "metro", "poyezd", "marshrutka"],
+        "yonilg'i": ["benzin", "yonilg'i", "gaz kolonka", "zapravka"],
+        "transport (umumiy)": ["transport", "moshina", "mashina", "yo'l haqi"],
+    },
+    "kiyim-kechak": {
+        "kiyim": ["kiyim", "futbolka", "shim", "ko'ylak", "kurtka"],
+        "poyabzal": ["poyabzal", "krossovka", "botinka", "tufli"],
+        "aksessuar": ["sumka", "soat", "ko'zoynak", "aksessuar"],
+    },
+    "kommunal": {
+        "svet/elektr": ["svet", "elektr"],
+        "gaz": ["gaz"],
+        "suv": ["suv ta'minoti", "suv haqi"],
+        "internet/aloqa": ["internet", "wifi", "telefon", "aloqa"],
+        "ijara": ["ijara", "kvartira haqi"],
+        "kommunal (umumiy)": ["kommunal"],
+    },
+    "sog'liq": {
+        "dorixona": ["dori", "dorixona"],
+        "shifokor": ["shifokor", "vrach", "klinika", "kasalxona", "stomatolog"],
+        "sog'liq (umumiy)": ["sog'liq", "tibbiyot"],
+    },
+    "ko'ngilochar": {
+        "kino/teatr": ["kino", "teatr", "konsert"],
+        "sayohat": ["sayohat", "dam olish", "safar"],
+        "o'yin-kulgi": ["o'yin", "oyin", "klub", "bar"],
+        "sovg'a": ["sovg'a", "gift"],
+    },
+    "ta'lim": {
+        "kitob": ["kitob"],
+        "kurs/repetitor": ["kurs", "repetitor"],
+        "ta'lim (umumiy)": ["ta'lim", "maktab", "universitet"],
+    },
 }
 
 MULTIPLIERS = {
@@ -77,22 +91,24 @@ def extract_amount(text: str):
     return best_value, best_span
 
 
-def extract_category(text: str) -> str:
+def extract_category(text: str):
+    """(category, subcategory) qaytaradi. Topilmasa ('boshqa', 'boshqa')."""
     lowered = text.lower()
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        for kw in keywords:
-            if kw in lowered:
-                return category
-    return "boshqa"
+    for category, subcats in CATEGORY_TREE.items():
+        for subcat, keywords in subcats.items():
+            for kw in keywords:
+                if kw in lowered:
+                    return category, subcat
+    return "boshqa", "boshqa"
 
 
 def parse_expense_text(text: str):
     """
-    Matndan (amount, category, note) qaytaradi.
+    Matndan (amount, category, subcategory, note) qaytaradi.
     Agar summa topilmasa, amount = None bo'ladi.
     """
     amount, span = extract_amount(text)
-    category = extract_category(text)
+    category, subcategory = extract_category(text)
 
     # Note sifatida summa raqamidan tashqari qolgan matnni olamiz
     if span:
@@ -101,6 +117,7 @@ def parse_expense_text(text: str):
         note = text.strip()
     note = re.sub(r"\s+", " ", note).strip(" -,.")
     if not note:
-        note = category
+        note = subcategory
 
-    return amount, category, note
+    return amount, category, subcategory, note
+

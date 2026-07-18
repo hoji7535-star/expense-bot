@@ -95,7 +95,7 @@ async def delete_last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _register_expense(update: Update, text: str, source: str):
     user_id = update.effective_user.id
-    amount, category, note = parse_expense_text(text)
+    amount, category, subcategory, note = parse_expense_text(text)
 
     if amount is None:
         await update.message.reply_text(
@@ -105,11 +105,13 @@ async def _register_expense(update: Update, text: str, source: str):
         )
         return
 
-    db.add_expense(user_id, amount, category, note, source=source)
+    db.add_expense(user_id, amount, category, subcategory, note, source=source)
     emoji = reports.CATEGORY_EMOJI.get(category, "📦")
+    sub_line = f"\n🏷 {subcategory}" if subcategory != "boshqa" else ""
     await update.message.reply_text(
-        f"✅ Qayd etildi: {emoji} *{category}* — {amount:,.0f} so'm\n"
-        f"📝 {note}".replace(",", " "),
+        f"✅ Qayd etildi: {emoji} *{category}* — {amount:,.0f} so'm".replace(",", " ")
+        + sub_line
+        + f"\n📝 {note}",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )

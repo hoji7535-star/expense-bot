@@ -27,6 +27,7 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 amount REAL NOT NULL,
                 category TEXT NOT NULL,
+                subcategory TEXT DEFAULT 'boshqa',
                 note TEXT,
                 source TEXT DEFAULT 'text',
                 created_at TEXT NOT NULL
@@ -36,14 +37,21 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_user_date
             ON expenses (user_id, created_at)
         """)
+        # Eski bazalarda subcategory ustuni bo'lmasligi mumkin — mavjud
+        # bo'lmasa qo'shib qo'yamiz (migratsiya).
+        cols = [row["name"] for row in conn.execute("PRAGMA table_info(expenses)")]
+        if "subcategory" not in cols:
+            conn.execute(
+                "ALTER TABLE expenses ADD COLUMN subcategory TEXT DEFAULT 'boshqa'"
+            )
 
 
-def add_expense(user_id: int, amount: float, category: str, note: str, source: str = "text"):
+def add_expense(user_id: int, amount: float, category: str, subcategory: str, note: str, source: str = "text"):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO expenses (user_id, amount, category, note, source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, amount, category, note, source, datetime.now().isoformat()),
+            "INSERT INTO expenses (user_id, amount, category, subcategory, note, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, amount, category, subcategory, note, source, datetime.now().isoformat()),
         )
 
 
@@ -76,6 +84,17 @@ def get_summary_by_category(user_id: int, start: datetime, end: datetime):
             "SELECT category, SUM(amount) as total, COUNT(*) as cnt "
             "FROM expenses WHERE user_id = ? AND created_at >= ? AND created_at < ? "
             "GROUP BY category ORDER BY total DESC",
+            (user_id, start.isoformat(), end.isoformat()),
+        ).fetchall()
+        return rows
+
+
+def get_summary_by_subcategory(user_id: int, start: datetime, end: datetime):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT category, subcategory, SUM(amount) as total, COUNT(*) as cnt "
+            "FROM expenses WHERE user_id = ? AND created_at >= ? AND created_at < ? "
+            "GROUP BY category, subcategory ORDER BY category, total DESC",
             (user_id, start.isoformat(), end.isoformat()),
         ).fetchall()
         return rows
