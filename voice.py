@@ -8,7 +8,21 @@ ruscha (ru-RU) bilan qayta urinib ko'riladi.
 """
 import os
 import subprocess
+import sys
 import tempfile
+import types
+
+# Python 3.13 standart kutubxonadan 'aifc' va 'audioop' modullarini olib
+# tashladi, lekin 'speech_recognition' kutubxonasi hali ularni import
+# qiladi. Bizga faqat WAV formatini tinglash kerak (AIFF kerak emas),
+# shuning uchun mavjud bo'lmasa, zararsiz "stub" modul bilan almashtiramiz.
+for _mod_name in ("aifc", "audioop"):
+    if _mod_name not in sys.modules:
+        try:
+            __import__(_mod_name)
+        except ModuleNotFoundError:
+            sys.modules[_mod_name] = types.ModuleType(_mod_name)
+
 import speech_recognition as sr
 
 recognizer = sr.Recognizer()
