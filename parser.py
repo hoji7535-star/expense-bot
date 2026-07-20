@@ -10,10 +10,19 @@ Misollar:
 """
 import re
 
-# Standart kategoriyalar o'chirildi — endi faqat foydalanuvchi o'zi
-# /kategoriyayukla yoki /yangikategoriya orqali qo'shgan kategoriyalar
-# ishlatiladi.
+# Standart kategoriyalar o'chirildi — endi CHIQIM (xarajat) uchun faqat
+# foydalanuvchi o'zi /kategoriyayukla yoki /yangikategoriya orqali
+# qo'shgan kategoriyalar ishlatiladi.
 CATEGORY_TREE = {}
+
+# KIRIM (daromad) uchun standart kategoriyalar — foydalanuvchi so'ragan
+# bo'yicha, kerak bo'lsa /daromadyukla orqali kengaytirish mumkin.
+INCOME_CATEGORY_TREE = {
+    "pensiya": {"pensiya": ["pensiya"]},
+    "taksi": {"taksi": ["taksi", "taxi"]},
+    "asaxiy": {"asaxiy": ["asaxiy"]},
+    "iman": {"iman": ["iman"]},
+}
 
 MULTIPLIERS = {
     "ming": 1_000,
@@ -50,10 +59,12 @@ def extract_amount(text: str):
     return best_value, best_span
 
 
-def extract_category(text: str, custom_categories=None):
+def extract_category(text: str, custom_categories=None, default_tree=None):
     """(category, subcategory) qaytaradi. Topilmasa ('boshqa', 'boshqa').
 
     custom_categories: [(category, subcategory, [keywords...]), ...]
+    default_tree: category -> {subcat: [keywords]} — chiqim uchun bo'sh
+        (CATEGORY_TREE), kirim uchun INCOME_CATEGORY_TREE beriladi.
 
     Ikki bosqichli aniqlash:
     1) Avval matnda kategoriya NOMINING o'zi bor-yo'qligini tekshiramiz
@@ -63,6 +74,8 @@ def extract_category(text: str, custom_categories=None):
     2) Agar kategoriya nomi topilmasa, barcha kalit so'zlar bo'yicha
        to'g'ridan-to'g'ri qidiramiz (avvalgidek).
     """
+    if default_tree is None:
+        default_tree = CATEGORY_TREE
     lowered = text.lower()
 
     # Foydalanuvchi kategoriyalarini category -> {subcat: [keywords]} ga yig'amiz
@@ -73,7 +86,7 @@ def extract_category(text: str, custom_categories=None):
 
     # 1-bosqich: kategoriya nomi matnda bormi?
     all_trees = [(cat, subs) for cat, subs in custom_tree.items()] + \
-                [(cat, subs) for cat, subs in CATEGORY_TREE.items()]
+                [(cat, subs) for cat, subs in default_tree.items()]
     for category, subs in all_trees:
         if category.lower() in lowered:
             # Shu kategoriya ichida subkategoriya qidiramiz
@@ -106,7 +119,7 @@ def extract_category(text: str, custom_categories=None):
             # orqali so'raydi.
             return "boshqa", "boshqa"
 
-    for category, subcats in CATEGORY_TREE.items():
+    for category, subcats in default_tree.items():
         for subcat, keywords in subcats.items():
             for kw in keywords:
                 if kw in lowered:
@@ -114,13 +127,13 @@ def extract_category(text: str, custom_categories=None):
     return "boshqa", "boshqa"
 
 
-def parse_expense_text(text: str, custom_categories=None):
+def parse_expense_text(text: str, custom_categories=None, default_tree=None):
     """
     Matndan (amount, category, subcategory, note) qaytaradi.
     Agar summa topilmasa, amount = None bo'ladi.
     """
     amount, span = extract_amount(text)
-    category, subcategory = extract_category(text, custom_categories)
+    category, subcategory = extract_category(text, custom_categories, default_tree)
 
     # Note sifatida summa raqamidan tashqari qolgan matnni olamiz
     if span:

@@ -1,4 +1,4 @@
-python-telegram-bot==21.6
+python-telegram-bot[job-queue]==21.6
 SpeechRecognition==3.10.4
 pydub==0.25.1
 python-dotenv==1.0.1

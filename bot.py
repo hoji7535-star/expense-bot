@@ -1,5 +1,5 @@
 """
-bot.py — Shaxsiy xarajatlar hisobi Telegram boti.
+bot.py — Shaxsiy xarajat (chiqim) va daromad (kirim) hisobi Telegram boti.
 
 Ishga tushirish:
     1. .env faylida TELEGRAM_BOT_TOKEN ni kiriting (.env.example ga qarang)
@@ -7,19 +7,30 @@ Ishga tushirish:
     3. ffmpeg o'rnatilganiga ishonch hosil qiling (apt install ffmpeg)
     4. python bot.py
 
-Buyruqlar:
-    /start          - botni ishga tushirish, yo'riqnoma
-    /help           - yordam
-    /oylik          - joriy oy hisobot
-    /yillik         - joriy yil hisobot
-    /ochirish       - oxirgi kiritilgan xarajatni o'chirish
-    Matn xabar      - "market 50000" kabi yozib xarajat kiritish
-    Ovozli xabar    - gapirib xarajat kiritish ("taksiga o'n besh ming so'm")
+Asosiy buyruqlar:
+    /start, /help          — yo'riqnoma
+    /oylik, /yillik        — chiqim + kirim + balans hisoboti (matn + diagramma)
+    /ochirish               — oxirgi CHIQIMni o'chirish
+    /daromadochirish         — oxirgi KIRIMni o'chirish
+    /daromad <matn>          — daromad (kirim) kiritish, masalan: /daromad pensiya 500000
+
+    Kategoriya (CHIQIM):
+    /kategoriyalar, /yangikategoriya, /kategoriyayukla,
+    /kategoriyanomi, /kategoriyaochir
+
+    Kategoriya (KIRIM):
+    /daromadkategoriyalar, /yangidaromadkategoriya, /daromadkategoriyayukla,
+    /daromadkategoriyanomi, /daromadkategoriyaochir
+
+    Matn xabar (oddiy)  → CHIQIM sifatida qayd etiladi
+    Ovozli xabar        → CHIQIM sifatida qayd etiladi
+    Har oyning 1-sanasida, avtomatik ravishda o'tgan oy hisoboti yuboriladi.
 """
 import logging
 import os
+import re
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
@@ -34,17 +45,44 @@ from telegram.ext import (
 )
 
 import database as db
-import re
+from database import CHIQIM, KIRIM
 import reports
 import voice as voice_module
-from parser import parse_expense_text
+from parser import parse_expense_text, CATEGORY_TREE, INCOME_CATEGORY_TREE
 
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["📊 Oylik hisobot", "📆 Yillik hisobot"],
+        ["🏷 Kategoriyalar", "💵 Daromad qo'shish"],
+        ["↩️ Oxirgisini o'chirish", "ℹ️ Yordam"],
+    ],
+    resize_keyboard=True,
+)
+
+# Suhbat holatlari
+CAT_NAME, SUBCAT_NAME, KEYWORDS = range(3)
+BULK_IMPORT = 3
+DAROMAD_TEXT = 4
+
+
+# ============================================================
+#  Yordamchi: kategoriya ro'yxatini matndan bir martada aniqlash
+# ============================================================
 
 def _looks_like_bulk_category_list(text: str) -> bool:
     """Matn 'Kategoriya: sub1, sub2, ...' formatidagi qatorlardan
-    iboratmi — shunga o'xshasa True. Bu tekshiruv suhbat holatidan
-    (ConversationHandler state) mustaqil ishlaydi, shuning uchun bot
-    qayta ishga tushgan taqdirda ham ro'yxatni to'g'ri tanib oladi."""
+    iboratmi — shunga o'xshasa True. Suhbat holatidan mustaqil ishlaydi,
+    shuning uchun bot qayta ishga tushgan taqdirda ham ro'yxatni to'g'ri
+    tanib oladi."""
     line_pattern = re.compile(r"^[^:]{2,40}:\s*[^,]+(,\s*[^,]+)+$")
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     if not lines:
@@ -53,7 +91,7 @@ def _looks_like_bulk_category_list(text: str) -> bool:
     return matching >= 1 and matching >= len(lines) / 2
 
 
-async def _do_bulk_import(update: Update, user_id: int, raw_text: str) -> str:
+async def _do_bulk_import(user_id: int, raw_text: str, kind: str) -> str:
     """Ro'yxatni bazaga yozadi va xabar matnini qaytaradi."""
     lines = raw_text.strip().splitlines()
     added = []
@@ -72,7 +110,7 @@ async def _do_bulk_import(update: Update, user_id: int, raw_text: str) -> str:
             errors.append(line)
             continue
         for sub in subcats:
-            db.add_custom_category(user_id, category, sub, [sub])
+            db.add_custom_category(user_id, category, sub, [sub], kind=kind)
             added.append(f"{category} → {sub}")
 
     if not added:
@@ -83,47 +121,35 @@ async def _do_bulk_import(update: Update, user_id: int, raw_text: str) -> str:
         summary += f"\n⚠️ {len(errors)} qator formatga mos kelmadi va o'tkazib yuborildi."
     return summary
 
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
-
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        ["📊 Oylik hisobot", "📆 Yillik hisobot"],
-        ["🏷 Kategoriyalar", "↩️ Oxirgisini o'chirish"],
-        ["ℹ️ Yordam"],
-    ],
-    resize_keyboard=True,
-)
-
-# /yangikategoriya suhbat holatlari
-CAT_NAME, SUBCAT_NAME, KEYWORDS = range(3)
-# /kategoriyayukla suhbat holati
-BULK_IMPORT = 3
-
+# ============================================================
+#  /start, /help
+# ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    db.register_user(user_id, chat_id)
+
     text = (
-        "👋 Salom! Men shaxsiy xarajatlar hisobi botiman.\n\n"
-        "💬 *Matn bilan* xarajat kiriting, masalan:\n"
-        "   `market 50000`\n"
-        "   `taksiga 15 ming`\n"
-        "   `kino uchun 30000 so'm`\n\n"
-        "🎙 *Ovozli xabar* yuborib ham xarajat kirita olasiz — shunchaki gapiring.\n\n"
-        "📊 /oylik — joriy oy hisoboti (matn + diagramma)\n"
-        "📆 /yillik — joriy yil hisoboti (matn + diagramma)\n"
-        "↩️ /ochirish — oxirgi yozuvni o'chirish\n\n"
-        "🏷 *Kategoriyalar:*\n"
-        "   /kategoriyalar — ro'yxatni ko'rish\n"
-        "   /yangikategoriya — bitta-bitta kategoriya qo'shish\n"
-        "   /kategoriyayukla — ro'yxatni bir martada yuklash\n"
-        "   /kategoriyanomi — nomini o'zgartirish\n"
-        "   /kategoriyaochir — o'chirish\n\n"
+        "👋 Salom! Men shaxsiy xarajat va daromad hisobi botiman.\n\n"
+        "💬 *Xarajat (chiqim)* — matn yoki ovoz bilan yozing:\n"
+        "   `Muhammad Umar dori 5000`\n"
+        "   `Avto benzin 100 ming`\n\n"
+        "💵 *Daromad (kirim)* — `/daromad` buyrug'i bilan:\n"
+        "   `/daromad pensiya 500000`\n"
+        "   `/daromad taksi 300 ming`\n\n"
+        "📊 /oylik — joriy oy hisoboti (chiqim + kirim + balans + diagramma)\n"
+        "📆 /yillik — joriy yil hisoboti\n"
+        "↩️ /ochirish — oxirgi chiqimni o'chirish\n"
+        "↩️ /daromadochirish — oxirgi kirimni o'chirish\n\n"
+        "🏷 *Chiqim kategoriyalari:*\n"
+        "   /kategoriyalar, /yangikategoriya, /kategoriyayukla,\n"
+        "   /kategoriyanomi, /kategoriyaochir\n\n"
+        "🏷 *Kirim kategoriyalari:*\n"
+        "   /daromadkategoriyalar, /yangidaromadkategoriya,\n"
+        "   /daromadkategoriyayukla, /daromadkategoriyanomi, /daromadkategoriyaochir\n\n"
+        "🗓 Har oyning 1-sanasida, o'tgan oy hisoboti avtomatik yuboriladi.\n"
         "❓ Kategoriya aniqlanmasa, bot tugmalar orqali tanlashni so'raydi."
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
@@ -133,68 +159,113 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 
+# ============================================================
+#  Hisobotlar
+# ============================================================
+
 async def monthly_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     user_id = update.effective_user.id
-    text = reports.monthly_report(user_id, now.year, now.month)
+    text = reports.monthly_full_report(user_id, now.year, now.month)
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
-    chart = reports.monthly_chart(user_id, now.year, now.month)
+
+    chart = reports.monthly_chart(user_id, now.year, now.month, kind=CHIQIM)
     if chart:
-        await update.message.reply_photo(photo=chart)
+        await update.message.reply_photo(photo=chart, caption="📊 Chiqimlar taqsimoti")
+    income_chart = reports.monthly_chart(user_id, now.year, now.month, kind=KIRIM)
+    if income_chart:
+        await update.message.reply_photo(photo=income_chart, caption="💵 Kirimlar taqsimoti")
 
 
 async def yearly_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     user_id = update.effective_user.id
-    text = reports.yearly_report(user_id, now.year)
+    text = reports.yearly_full_report(user_id, now.year)
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
-    chart = reports.yearly_chart(user_id, now.year)
+
+    chart = reports.yearly_chart(user_id, now.year, kind=CHIQIM)
     if chart:
-        await update.message.reply_photo(photo=chart)
+        await update.message.reply_photo(photo=chart, caption="📊 Chiqimlar taqsimoti")
+    income_chart = reports.yearly_chart(user_id, now.year, kind=KIRIM)
+    if income_chart:
+        await update.message.reply_photo(photo=income_chart, caption="💵 Kirimlar taqsimoti")
 
 
 async def delete_last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    ok = db.delete_last_expense(user_id)
+    ok = db.delete_last_expense(user_id, kind=CHIQIM)
     if ok:
-        await update.message.reply_text("✅ Oxirgi xarajat o'chirildi.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("✅ Oxirgi chiqim o'chirildi.", reply_markup=MAIN_KEYBOARD)
     else:
-        await update.message.reply_text("Hozircha o'chiriladigan xarajat yo'q.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("Hozircha o'chiriladigan chiqim yo'q.", reply_markup=MAIN_KEYBOARD)
 
 
-async def list_categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from parser import CATEGORY_TREE
+async def delete_last_income_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    ok = db.delete_last_expense(user_id, kind=KIRIM)
+    if ok:
+        await update.message.reply_text("✅ Oxirgi kirim o'chirildi.", reply_markup=MAIN_KEYBOARD)
+    else:
+        await update.message.reply_text("Hozircha o'chiriladigan kirim yo'q.", reply_markup=MAIN_KEYBOARD)
+
+
+# ============================================================
+#  Kategoriyalarni ko'rish
+# ============================================================
+
+async def _list_categories(update: Update, user_id: int, kind: str):
+    default_tree = INCOME_CATEGORY_TREE if kind == KIRIM else CATEGORY_TREE
+    label = "Kirim" if kind == KIRIM else "Chiqim"
 
     lines = []
-    if CATEGORY_TREE:
-        lines.append("🏷 *Standart kategoriyalar:*\n")
-        for cat, subs in CATEGORY_TREE.items():
-            emoji = reports.CATEGORY_EMOJI.get(cat, "📦")
+    if default_tree:
+        lines.append(f"🏷 *Standart {label.lower()} kategoriyalari:*\n")
+        for cat, subs in default_tree.items():
+            emoji = reports.CATEGORY_EMOJI.get(cat, "📌")
             lines.append(f"{emoji} *{cat}*: " + ", ".join(subs.keys()))
+        lines.append("")
 
-    user_id = update.effective_user.id
-    custom = db.get_custom_categories(user_id)
+    custom = db.get_custom_categories(user_id, kind=kind)
     if custom:
-        lines.append("🏷 *Sizning kategoriyalaringiz:*\n")
+        lines.append(f"🏷 *Sizning {label.lower()} kategoriyalaringiz:*\n")
         seen = {}
         for cat, sub, _ in custom:
             seen.setdefault(cat, []).append(sub)
         for cat, subs in seen.items():
             lines.append(f"📌 *{cat}*: " + ", ".join(subs))
-    else:
-        lines.append(
-            "Hozircha kategoriya yo'q. /kategoriyayukla yoki /yangikategoriya bilan qo'shing."
-        )
+    elif not default_tree:
+        lines.append(f"Hozircha {label.lower()} kategoriyasi yo'q.")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
 
 
-# ---- /yangikategoriya suhbat oqimi ----
+async def list_categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _list_categories(update, update.effective_user.id, CHIQIM)
+
+
+async def list_income_categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _list_categories(update, update.effective_user.id, KIRIM)
+
+
+# ============================================================
+#  /yangikategoriya va /yangidaromadkategoriya — bitta-bitta qo'shish
+# ============================================================
 
 async def new_category_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_cat_kind"] = CHIQIM
     await update.message.reply_text(
-        "🆕 Yangi kategoriya yaratamiz.\n\n"
-        "1-qadam: Kategoriya nomini kiriting (masalan: `Sport`, `Uy hayvonlari`)",
+        "🆕 Yangi CHIQIM kategoriyasi yaratamiz.\n\n"
+        "1-qadam: Kategoriya nomini kiriting (masalan: `Sport`)",
+        parse_mode="Markdown",
+    )
+    return CAT_NAME
+
+
+async def new_income_category_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_cat_kind"] = KIRIM
+    await update.message.reply_text(
+        "🆕 Yangi KIRIM (daromad) kategoriyasi yaratamiz.\n\n"
+        "1-qadam: Kategoriya nomini kiriting (masalan: `Ijara daromadi`)",
         parse_mode="Markdown",
     )
     return CAT_NAME
@@ -222,10 +293,11 @@ async def new_category_get_keywords(update: Update, context: ContextTypes.DEFAUL
     user_id = update.effective_user.id
     cat = context.user_data.pop("new_cat_name")
     subcat = context.user_data.pop("new_cat_subcat")
-    db.add_custom_category(user_id, cat, subcat, keywords)
+    kind = context.user_data.pop("new_cat_kind", CHIQIM)
+    db.add_custom_category(user_id, cat, subcat, keywords, kind=kind)
+    label = "Kirim" if kind == KIRIM else "Chiqim"
     await update.message.reply_text(
-        f"✅ Yangi kategoriya qo'shildi: 📌 *{cat}* → {subcat}\n\n"
-        f"Endi matnda shu kalit so'zlardan biri ishlatilsa, xarajat shu kategoriyaga tushadi.",
+        f"✅ Yangi {label.lower()} kategoriyasi qo'shildi: 📌 *{cat}* → {subcat}",
         parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )
@@ -233,68 +305,94 @@ async def new_category_get_keywords(update: Update, context: ContextTypes.DEFAUL
 
 
 async def new_category_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.pop("new_cat_name", None)
-    context.user_data.pop("new_cat_subcat", None)
+    for k in ("new_cat_name", "new_cat_subcat", "new_cat_kind"):
+        context.user_data.pop(k, None)
     await update.message.reply_text("❌ Bekor qilindi.", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
+
+# ============================================================
+#  O'chirish va nomini o'zgartirish
+# ============================================================
 
 async def delete_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not context.args:
         await update.message.reply_text(
-            "Kategoriya nomini ko'rsating, masalan:\n`/kategoriyaochir Sport`",
-            parse_mode="Markdown",
+            "Kategoriya nomini ko'rsating: `/kategoriyaochir Sport`", parse_mode="Markdown"
         )
         return
     cat_name = " ".join(context.args)
-    ok = db.delete_custom_category(user_id, cat_name)
+    ok = db.delete_custom_category(user_id, cat_name, kind=CHIQIM)
     if ok:
-        await update.message.reply_text(f"✅ \"{cat_name}\" kategoriyasi o'chirildi.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(f"✅ \"{cat_name}\" o'chirildi.", reply_markup=MAIN_KEYBOARD)
     else:
+        await update.message.reply_text(f"\"{cat_name}\" topilmadi.", reply_markup=MAIN_KEYBOARD)
+
+
+async def delete_income_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
         await update.message.reply_text(
-            f"\"{cat_name}\" nomli o'zingiz qo'shgan kategoriya topilmadi.\n"
-            "Eslatma: standart kategoriyalarni o'chirib bo'lmaydi.",
-            reply_markup=MAIN_KEYBOARD,
+            "Kategoriya nomini ko'rsating: `/daromadkategoriyaochir Ijara`", parse_mode="Markdown"
         )
+        return
+    cat_name = " ".join(context.args)
+    ok = db.delete_custom_category(user_id, cat_name, kind=KIRIM)
+    if ok:
+        await update.message.reply_text(f"✅ \"{cat_name}\" o'chirildi.", reply_markup=MAIN_KEYBOARD)
+    else:
+        await update.message.reply_text(f"\"{cat_name}\" topilmadi.", reply_markup=MAIN_KEYBOARD)
 
 
-async def rename_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _rename_category(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str):
     user_id = update.effective_user.id
     full_text = " ".join(context.args)
     if "|" not in full_text:
+        cmd = "/daromadkategoriyanomi" if kind == KIRIM else "/kategoriyanomi"
         await update.message.reply_text(
-            "Format: `/kategoriyanomi Eski nomi | Yangi nomi`\n"
-            "Masalan: `/kategoriyanomi Wife | Xotinim`",
-            parse_mode="Markdown",
+            f"Format: `{cmd} Eski nomi | Yangi nomi`", parse_mode="Markdown"
         )
         return
     old_name, new_name = [p.strip() for p in full_text.split("|", 1)]
-    ok = db.rename_custom_category(user_id, old_name, new_name)
+    ok = db.rename_custom_category(user_id, old_name, new_name, kind=kind)
     if ok:
         await update.message.reply_text(
-            f"✅ \"{old_name}\" → \"{new_name}\" deb o'zgartirildi (avvalgi xarajatlar ham yangilandi).",
-            reply_markup=MAIN_KEYBOARD,
+            f"✅ \"{old_name}\" → \"{new_name}\" deb o'zgartirildi.", reply_markup=MAIN_KEYBOARD
         )
     else:
-        await update.message.reply_text(
-            f"\"{old_name}\" nomli o'zingiz qo'shgan kategoriya topilmadi.",
-            reply_markup=MAIN_KEYBOARD,
-        )
+        await update.message.reply_text(f"\"{old_name}\" topilmadi.", reply_markup=MAIN_KEYBOARD)
 
 
-# ---- /kategoriyayukla — bir martada ko'p kategoriya import qilish ----
+async def rename_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _rename_category(update, context, CHIQIM)
+
+
+async def rename_income_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _rename_category(update, context, KIRIM)
+
+
+# ============================================================
+#  Bir martada ro'yxat yuklash (/kategoriyayukla, /daromadkategoriyayukla)
+# ============================================================
 
 async def bulk_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bulk_kind"] = CHIQIM
     await update.message.reply_text(
-        "📋 Kategoriyalar ro'yxatini yuboring. Har bir qatorda:\n"
+        "📋 CHIQIM kategoriyalari ro'yxatini yuboring. Har bir qatorda:\n"
         "`Kategoriya: subkategoriya1, subkategoriya2, ...`\n\n"
-        "Masalan:\n"
-        "```\n"
-        "Muhammad Umar: bogcha, dori, kiyim, oyinchoq, ovqat, boshqa\n"
-        "Hadicha: bogcha, dori, kiyim, oyinchoq, ovqat, PAMPERS, boshqa\n"
-        "Avto: gaz, benzin, moyka, boshqa\n"
-        "```\n"
+        "Bekor qilish uchun /bekor yozing.",
+        parse_mode="Markdown",
+    )
+    return BULK_IMPORT
+
+
+async def bulk_import_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["bulk_kind"] = KIRIM
+    await update.message.reply_text(
+        "📋 KIRIM kategoriyalari ro'yxatini yuboring. Har bir qatorda:\n"
+        "`Kategoriya: subkategoriya1, subkategoriya2, ...`\n\n"
+        "Masalan:\n```\nAsosiy ish: oylik, bonus\nQoshimcha: frilanс, ijara\n```\n"
         "Bekor qilish uchun /bekor yozing.",
         parse_mode="Markdown",
     )
@@ -304,52 +402,55 @@ async def bulk_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     raw_text = update.message.text.strip()
+    kind = context.user_data.get("bulk_kind", CHIQIM)
 
-    # Agar hech qanday qatorda ":" bo'lmasa — bu kategoriya ro'yxati emas,
-    # balki foydalanuvchi (ehtimol bilmasdan) oddiy xarajat yozgan.
-    # Suhbatni yopib, uni oddiy xarajat sifatida qabul qilamiz.
     if ":" not in raw_text:
         await update.message.reply_text(
             "ℹ️ Bu kategoriya ro'yxati formatiga o'xshamadi, shuning uchun "
             "oddiy xarajat sifatida qabul qildim:"
         )
-        await _register_expense(update, context, raw_text, source="text")
+        await _register_transaction(update, context, raw_text, source="text", kind=CHIQIM)
+        context.user_data.pop("bulk_kind", None)
         return ConversationHandler.END
 
-    result_text = await _do_bulk_import(update, user_id, raw_text)
+    result_text = await _do_bulk_import(user_id, raw_text, kind)
     if result_text.startswith("❌"):
         await update.message.reply_text(
-            result_text + "\nQayta urinib ko'ring yoki /bekor deb yozing.",
-            parse_mode="Markdown",
+            result_text + "\nQayta urinib ko'ring yoki /bekor deb yozing.", parse_mode="Markdown"
         )
         return BULK_IMPORT
 
+    context.user_data.pop("bulk_kind", None)
     await update.message.reply_text(result_text, reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
-def _all_category_names(user_id: int):
-    """Foydalanuvchining custom + standart kategoriya nomlari ro'yxati."""
-    from parser import CATEGORY_TREE
-    custom_grouped = db.get_custom_categories_grouped(user_id)
-    names = list(custom_grouped.keys()) + [c for c in CATEGORY_TREE.keys() if c not in custom_grouped]
+# ============================================================
+#  Kategoriya/subkategoriya tugmalar orqali tanlash
+# ============================================================
+
+def _all_category_names(user_id: int, kind: str):
+    default_tree = INCOME_CATEGORY_TREE if kind == KIRIM else CATEGORY_TREE
+    custom_grouped = db.get_custom_categories_grouped(user_id, kind=kind)
+    names = list(custom_grouped.keys()) + [c for c in default_tree.keys() if c not in custom_grouped]
     return names, custom_grouped
 
 
-def _subcats_for(category: str, custom_grouped: dict):
-    from parser import CATEGORY_TREE
+def _subcats_for(category: str, custom_grouped: dict, kind: str):
+    default_tree = INCOME_CATEGORY_TREE if kind == KIRIM else CATEGORY_TREE
     if category in custom_grouped:
         return custom_grouped[category]
-    if category in CATEGORY_TREE:
-        return list(CATEGORY_TREE[category].keys())
+    if category in default_tree:
+        return list(default_tree[category].keys())
     return ["boshqa"]
 
 
-async def _ask_category(update: Update, context: ContextTypes.DEFAULT_TYPE, amount, note, source):
+async def _ask_category(update: Update, context: ContextTypes.DEFAULT_TYPE, amount, note, source, kind):
     user_id = update.effective_user.id
-    names, _ = _all_category_names(user_id)
-    context.user_data["pending"] = {"amount": amount, "note": note, "source": source}
+    names, _ = _all_category_names(user_id, kind)
+    context.user_data["pending"] = {"amount": amount, "note": note, "source": source, "kind": kind}
     context.user_data["cat_choices"] = names
+    context.user_data["cat_kind"] = kind
 
     buttons = [
         [InlineKeyboardButton(f"{reports.CATEGORY_EMOJI.get(n, '📌')} {n}", callback_data=f"cat:{i}")]
@@ -357,8 +458,9 @@ async def _ask_category(update: Update, context: ContextTypes.DEFAULT_TYPE, amou
     ]
     buttons.append([InlineKeyboardButton("📦 Boshqa", callback_data="cat:boshqa")])
 
+    label = "Kirim" if kind == KIRIM else "Chiqim"
     await update.message.reply_text(
-        f"💰 {amount:,.0f} so'm — qaysi kategoriyaga tegishli?".replace(",", " "),
+        f"💰 {amount:,.0f} so'm ({label}) — qaysi kategoriyaga tegishli?".replace(",", " "),
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -368,6 +470,7 @@ async def category_button_handler(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     user_id = update.effective_user.id
     data = query.data
+    kind = context.user_data.get("cat_kind", CHIQIM)
 
     if data.startswith("cat:"):
         choice = data.split(":", 1)[1]
@@ -378,15 +481,12 @@ async def category_button_handler(update: Update, context: ContextTypes.DEFAULT_
             idx = int(choice)
             category = names[idx] if idx < len(names) else "boshqa"
 
-        _, custom_grouped = _all_category_names(user_id)
-        subs = _subcats_for(category, custom_grouped)
+        _, custom_grouped = _all_category_names(user_id, kind)
+        subs = _subcats_for(category, custom_grouped, kind)
         context.user_data["chosen_category"] = category
         context.user_data["sub_choices"] = subs
 
-        buttons = [
-            [InlineKeyboardButton(s, callback_data=f"sub:{i}")]
-            for i, s in enumerate(subs)
-        ]
+        buttons = [[InlineKeyboardButton(s, callback_data=f"sub:{i}")] for i, s in enumerate(subs)]
         await query.edit_message_text(
             f"🏷 Kategoriya: *{category}*\nEndi turini tanlang:",
             parse_mode="Markdown",
@@ -401,46 +501,52 @@ async def category_button_handler(update: Update, context: ContextTypes.DEFAULT_
         category = context.user_data.get("chosen_category", "boshqa")
         pending = context.user_data.pop("pending", None)
         if not pending:
-            await query.edit_message_text("❌ Xatolik: xarajat topilmadi, qayta urinib ko'ring.")
+            await query.edit_message_text("❌ Xatolik: yozuv topilmadi, qayta urinib ko'ring.")
             return
 
         db.add_expense(
-            user_id, pending["amount"], category, subcategory, pending["note"], source=pending["source"]
+            user_id, pending["amount"], category, subcategory, pending["note"],
+            source=pending["source"], kind=pending["kind"],
         )
         emoji = reports.CATEGORY_EMOJI.get(category, "📌")
+        label = "Kirim" if pending["kind"] == KIRIM else "Chiqim"
         await query.edit_message_text(
-            f"✅ Qayd etildi: {emoji} *{category}* → {subcategory} — "
+            f"✅ Qayd etildi ({label}): {emoji} *{category}* → {subcategory} — "
             f"{pending['amount']:,.0f} so'm".replace(",", " "),
             parse_mode="Markdown",
         )
-        context.user_data.pop("cat_choices", None)
-        context.user_data.pop("sub_choices", None)
-        context.user_data.pop("chosen_category", None)
+        for k in ("cat_choices", "sub_choices", "chosen_category", "cat_kind"):
+            context.user_data.pop(k, None)
 
 
-async def _register_expense(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, source: str):
+# ============================================================
+#  Tranzaksiya (chiqim yoki kirim) yozib olish
+# ============================================================
+
+async def _register_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, source: str, kind: str):
     user_id = update.effective_user.id
-    custom_categories = db.get_custom_categories(user_id)
-    amount, category, subcategory, note = parse_expense_text(text, custom_categories)
+    custom_categories = db.get_custom_categories(user_id, kind=kind)
+    default_tree = INCOME_CATEGORY_TREE if kind == KIRIM else CATEGORY_TREE
+    amount, category, subcategory, note = parse_expense_text(text, custom_categories, default_tree)
 
     if amount is None:
         await update.message.reply_text(
             "❌ Summani aniqlay olmadim. Iltimos, raqam bilan yozing, "
-            "masalan: `market 50000` yoki `taksiga 15 ming`.",
+            "masalan: `Muhammad Umar dori 5000` yoki `pensiya 500000`.",
             parse_mode="Markdown",
         )
         return
 
-    # Kategoriya avtomatik aniqlanmadi — tugmalar orqali so'raymiz
     if category == "boshqa" and subcategory == "boshqa":
-        await _ask_category(update, context, amount=amount, note=note, source=source)
+        await _ask_category(update, context, amount=amount, note=note, source=source, kind=kind)
         return
 
-    db.add_expense(user_id, amount, category, subcategory, note, source=source)
-    emoji = reports.CATEGORY_EMOJI.get(category, "📦")
+    db.add_expense(user_id, amount, category, subcategory, note, source=source, kind=kind)
+    emoji = reports.CATEGORY_EMOJI.get(category, "📌")
+    label = "Kirim" if kind == KIRIM else "Chiqim"
     sub_line = f"\n🏷 {subcategory}" if subcategory != "boshqa" else ""
     await update.message.reply_text(
-        f"✅ Qayd etildi: {emoji} *{category}* — {amount:,.0f} so'm".replace(",", " ")
+        f"✅ Qayd etildi ({label}): {emoji} *{category}* — {amount:,.0f} so'm".replace(",", " ")
         + sub_line
         + f"\n📝 {note}",
         parse_mode="Markdown",
@@ -448,10 +554,24 @@ async def _register_expense(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     )
 
 
+async def daromad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Daromad matnini yozing, masalan:\n`/daromad pensiya 500000`\n`/daromad taksi 300 ming`",
+            parse_mode="Markdown",
+        )
+        return
+    text = " ".join(context.args)
+    await _register_transaction(update, context, text, source="text", kind=KIRIM)
+
+
+# ============================================================
+#  Matn va ovoz handlerlari (standart — CHIQIM)
+# ============================================================
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    # Klaviatura tugmalari
     if text == "📊 Oylik hisobot":
         await monthly_cmd(update, context)
         return
@@ -464,19 +584,22 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🏷 Kategoriyalar":
         await list_categories_cmd(update, context)
         return
+    if text == "💵 Daromad qo'shish":
+        await update.message.reply_text(
+            "Daromadni shunday yozing:\n`/daromad pensiya 500000`",
+            parse_mode="Markdown",
+        )
+        return
     if text == "ℹ️ Yordam":
         await help_cmd(update, context)
         return
 
-    # Stateless aniqlash: bu "Kategoriya: sub1, sub2" ro'yxatiga o'xshaydimi?
-    # Suhbat holatidan mustaqil ishlaydi — bot qayta ishga tushgan bo'lsa
-    # ham, /kategoriyayukla bosilmagan bo'lsa ham ishlaydi.
     if _looks_like_bulk_category_list(text):
-        result_text = await _do_bulk_import(update, update.effective_user.id, text)
+        result_text = await _do_bulk_import(update.effective_user.id, text, CHIQIM)
         await update.message.reply_text(result_text, reply_markup=MAIN_KEYBOARD)
         return
 
-    await _register_expense(update, context, text, source="text")
+    await _register_transaction(update, context, text, source="text", kind=CHIQIM)
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -490,25 +613,72 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with tempfile.TemporaryDirectory() as tmp_dir:
         ogg_path = os.path.join(tmp_dir, "voice.ogg")
         await tg_file.download_to_drive(ogg_path)
-
         try:
             text = voice_module.transcribe(ogg_path)
-        except Exception as e:
+        except Exception:
             logger.exception("Ovozni matnga o'girishda xato")
-            await status_msg.edit_text(
-                "❌ Ovozni matnga o'girib bo'lmadi. Iltimos, matn bilan urinib ko'ring."
-            )
+            await status_msg.edit_text("❌ Ovozni matnga o'girib bo'lmadi. Matn bilan urinib ko'ring.")
             return
 
     if not text:
-        await status_msg.edit_text(
-            "❌ Gapni tushunolmadim. Iltimos, aniqroq gapiring yoki matn bilan yozing."
-        )
+        await status_msg.edit_text("❌ Gapni tushunolmadim. Aniqroq gapiring yoki matn bilan yozing.")
         return
 
     await status_msg.edit_text(f"🗣 Eshitildi: \"{text}\"")
-    await _register_expense(update, context, text, source="voice")
+    await _register_transaction(update, context, text, source="voice", kind=CHIQIM)
 
+
+# ============================================================
+#  Har oyning 1-sanasida avtomatik hisobot
+# ============================================================
+
+async def send_monthly_reports_job(context: ContextTypes.DEFAULT_TYPE):
+    """Har kuni ishga tushadi, lekin faqat oyning 1-sanasida xabar yuboradi."""
+    now = datetime.now()
+    if now.day != 1:
+        return
+    py, pm = reports.prev_month(now.year, now.month)
+    await _broadcast_monthly_report(context, py, pm)
+
+
+async def _broadcast_monthly_report(context: ContextTypes.DEFAULT_TYPE, year: int, month: int):
+    users = db.get_all_users()
+    for user_id, chat_id in users:
+        try:
+            text = reports.monthly_full_report(user_id, year, month)
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+            chart = reports.monthly_chart(user_id, year, month, kind=CHIQIM)
+            if chart:
+                await context.bot.send_photo(chat_id=chat_id, photo=chart, caption="📊 Chiqimlar taqsimoti")
+            income_chart = reports.monthly_chart(user_id, year, month, kind=KIRIM)
+            if income_chart:
+                await context.bot.send_photo(chat_id=chat_id, photo=income_chart, caption="💵 Kirimlar taqsimoti")
+        except Exception:
+            logger.exception(f"Avtomatik hisobot yuborishda xato (user_id={user_id})")
+
+
+async def test_monthly_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Avtomatik hisobotni qo'lda sinash uchun (faqat shu foydalanuvchiga yuboradi)."""
+    now = datetime.now()
+    py, pm = reports.prev_month(now.year, now.month)
+    await update.message.reply_text(
+        f"🔧 Sinov: o'tgan oy ({reports.OY_NOMLARI[pm-1]} {py}) hisoboti shu tarzda yuboriladi:"
+    )
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    text = reports.monthly_full_report(user_id, py, pm)
+    await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+    chart = reports.monthly_chart(user_id, py, pm, kind=CHIQIM)
+    if chart:
+        await context.bot.send_photo(chat_id=chat_id, photo=chart, caption="📊 Chiqimlar taqsimoti")
+    income_chart = reports.monthly_chart(user_id, py, pm, kind=KIRIM)
+    if income_chart:
+        await context.bot.send_photo(chat_id=chat_id, photo=income_chart, caption="💵 Kirimlar taqsimoti")
+
+
+# ============================================================
+#  main()
+# ============================================================
 
 def main():
     if not TOKEN:
@@ -532,11 +702,27 @@ def main():
         conversation_timeout=300,
     )
 
+    income_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("yangidaromadkategoriya", new_income_category_start)],
+        states={
+            CAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_category_get_name)],
+            SUBCAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_category_get_subcat)],
+            KEYWORDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_category_get_keywords)],
+        },
+        fallbacks=[CommandHandler("bekor", new_category_cancel)],
+        conversation_timeout=300,
+    )
+
     bulk_import_handler = ConversationHandler(
         entry_points=[CommandHandler("kategoriyayukla", bulk_import_start)],
-        states={
-            BULK_IMPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_import_receive)],
-        },
+        states={BULK_IMPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_import_receive)]},
+        fallbacks=[CommandHandler("bekor", new_category_cancel)],
+        conversation_timeout=300,
+    )
+
+    bulk_import_income_handler = ConversationHandler(
+        entry_points=[CommandHandler("daromadkategoriyayukla", bulk_import_income_start)],
+        states={BULK_IMPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_import_receive)]},
         fallbacks=[CommandHandler("bekor", new_category_cancel)],
         conversation_timeout=300,
     )
@@ -546,14 +732,25 @@ def main():
     app.add_handler(CommandHandler("oylik", monthly_cmd))
     app.add_handler(CommandHandler("yillik", yearly_cmd))
     app.add_handler(CommandHandler("ochirish", delete_last_cmd))
+    app.add_handler(CommandHandler("daromadochirish", delete_last_income_cmd))
+    app.add_handler(CommandHandler("daromad", daromad_cmd))
     app.add_handler(CommandHandler("kategoriyalar", list_categories_cmd))
     app.add_handler(CommandHandler("kategoriyaochir", delete_category_cmd))
     app.add_handler(CommandHandler("kategoriyanomi", rename_category_cmd))
+    app.add_handler(CommandHandler("daromadkategoriyalar", list_income_categories_cmd))
+    app.add_handler(CommandHandler("daromadkategoriyaochir", delete_income_category_cmd))
+    app.add_handler(CommandHandler("daromadkategoriyanomi", rename_income_category_cmd))
+    app.add_handler(CommandHandler("avtomatiksinov", test_monthly_report_cmd))
     app.add_handler(conv_handler)
+    app.add_handler(income_conv_handler)
     app.add_handler(bulk_import_handler)
+    app.add_handler(bulk_import_income_handler)
     app.add_handler(CallbackQueryHandler(category_button_handler))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+    # Har kuni 09:00 da tekshiradi, faqat 1-sanada haqiqiy xabar yuboradi
+    app.job_queue.run_daily(send_monthly_reports_job, time=time(hour=9, minute=0), name="monthly_report_job")
 
     logger.info("Bot ishga tushdi...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
