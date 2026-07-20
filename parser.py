@@ -93,18 +93,59 @@ def extract_amount(text: str):
 
 def extract_category(text: str, custom_categories=None):
     """(category, subcategory) qaytaradi. Topilmasa ('boshqa', 'boshqa').
-    custom_categories: [(category, subcategory, [keywords...]), ...] —
-    foydalanuvchi qo'shgan kategoriyalar birinchi navbatda tekshiriladi,
-    chunki ular standart ro'yxatdan ustunroq bo'lishi kerak.
+
+    custom_categories: [(category, subcategory, [keywords...]), ...]
+
+    Ikki bosqichli aniqlash:
+    1) Avval matnda kategoriya NOMINING o'zi bor-yo'qligini tekshiramiz
+       (masalan "Muhammad Umar"). Topilsa, faqat SHU kategoriya ichidagi
+       subkategoriyalarni qidiramiz — bu bir xil so'z (masalan "dori")
+       turli odamlarga tegishli bo'lganda chalkashmaslik uchun kerak.
+    2) Agar kategoriya nomi topilmasa, barcha kalit so'zlar bo'yicha
+       to'g'ridan-to'g'ri qidiramiz (avvalgidek).
     """
     lowered = text.lower()
 
+    # Foydalanuvchi kategoriyalarini category -> {subcat: [keywords]} ga yig'amiz
+    custom_tree = {}
     if custom_categories:
         for category, subcat, keywords in custom_categories:
+            custom_tree.setdefault(category, {})[subcat] = keywords
+
+    # 1-bosqich: kategoriya nomi matnda bormi?
+    all_trees = [(cat, subs) for cat, subs in custom_tree.items()] + \
+                [(cat, subs) for cat, subs in CATEGORY_TREE.items()]
+    for category, subs in all_trees:
+        if category.lower() in lowered:
+            # Shu kategoriya ichida subkategoriya qidiramiz
+            for subcat, keywords in subs.items():
+                for kw in keywords:
+                    kw = kw.strip().lower()
+                    if kw and kw in lowered:
+                        return category, subcat
+            # Kategoriya topildi, lekin subkategoriya aniqlanmadi
+            first_sub = next(iter(subs), "boshqa")
+            return category, first_sub
+
+    # 2-bosqich: to'g'ridan-to'g'ri kalit so'z qidiruvi (custom birinchi)
+    if custom_categories:
+        matches = []
+        for category, subcat, keywords in custom_categories:
             for kw in keywords:
-                kw = kw.strip()
+                kw = kw.strip().lower()
                 if kw and kw in lowered:
-                    return category, subcat
+                    matches.append((category, subcat))
+                    break
+        if matches:
+            distinct_categories = {m[0] for m in matches}
+            if len(distinct_categories) == 1:
+                # Faqat bitta kategoriyaga tegishli — ishonchli
+                return matches[0]
+            # Bir nechta turli kategoriyaga mos keldi (masalan bir nechta
+            # odamda "dori" bor) — noto'g'ri taxmin qilmaslik uchun
+            # aniqlanmagan deb hisoblaymiz, bot foydalanuvchidan tugma
+            # orqali so'raydi.
+            return "boshqa", "boshqa"
 
     for category, subcats in CATEGORY_TREE.items():
         for subcat, keywords in subcats.items():

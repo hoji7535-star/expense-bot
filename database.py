@@ -90,6 +90,33 @@ def delete_custom_category(user_id: int, category: str) -> bool:
         return cur.rowcount > 0
 
 
+def rename_custom_category(user_id: int, old_name: str, new_name: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE custom_categories SET category = ? WHERE user_id = ? AND category = ?",
+            (new_name.strip(), user_id, old_name.strip()),
+        )
+        if cur.rowcount > 0:
+            # Avval shu nom bilan kiritilgan xarajatlarni ham yangilaymiz
+            conn.execute(
+                "UPDATE expenses SET category = ? WHERE user_id = ? AND category = ?",
+                (new_name.strip(), user_id, old_name.strip()),
+            )
+            return True
+        return False
+
+
+def get_custom_categories_grouped(user_id: int):
+    """{category: [subcategory, ...]} ko'rinishida qaytaradi (tugmalar uchun)."""
+    rows = get_custom_categories(user_id)
+    grouped = {}
+    for cat, sub, _ in rows:
+        grouped.setdefault(cat, [])
+        if sub not in grouped[cat]:
+            grouped[cat].append(sub)
+    return grouped
+
+
 def add_expense(user_id: int, amount: float, category: str, subcategory: str, note: str, source: str = "text"):
     with get_conn() as conn:
         conn.execute(
