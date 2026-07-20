@@ -19,7 +19,7 @@ Buyruqlar:
 import logging
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
@@ -258,7 +258,20 @@ async def bulk_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    lines = update.message.text.strip().splitlines()
+    raw_text = update.message.text.strip()
+    lines = raw_text.splitlines()
+
+    # Agar hech qanday qatorda ":" bo'lmasa — bu kategoriya ro'yxati emas,
+    # balki foydalanuvchi (ehtimol bilmasdan) oddiy xarajat yozgan.
+    # Suhbatni yopib, uni oddiy xarajat sifatida qabul qilamiz.
+    if ":" not in raw_text:
+        await update.message.reply_text(
+            "ℹ️ Bu kategoriya ro'yxati formatiga o'xshamadi, shuning uchun "
+            "oddiy xarajat sifatida qabul qildim:"
+        )
+        await _register_expense(update, context, raw_text, source="text")
+        return ConversationHandler.END
+
     added = []
     errors = []
 
@@ -280,10 +293,11 @@ async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not added:
         await update.message.reply_text(
-            "❌ Hech qanday kategoriya qo'shilmadi. Format: `Kategoriya: sub1, sub2`",
+            "❌ Hech qanday kategoriya qo'shilmadi. Format: `Kategoriya: sub1, sub2`\n"
+            "Qayta urinib ko'ring yoki /bekor deb yozing.",
             parse_mode="Markdown",
         )
-        return ConversationHandler.END
+        return BULK_IMPORT
 
     summary = f"✅ {len(added)} ta subkategoriya qo'shildi.\n"
     if errors:
@@ -485,6 +499,7 @@ def main():
             KEYWORDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_category_get_keywords)],
         },
         fallbacks=[CommandHandler("bekor", new_category_cancel)],
+        conversation_timeout=300,
     )
 
     bulk_import_handler = ConversationHandler(
@@ -493,6 +508,7 @@ def main():
             BULK_IMPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_import_receive)],
         },
         fallbacks=[CommandHandler("bekor", new_category_cancel)],
+        conversation_timeout=300,
     )
 
     app.add_handler(CommandHandler("start", start))
