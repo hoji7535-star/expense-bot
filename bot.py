@@ -120,15 +120,17 @@ async def delete_last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from parser import CATEGORY_TREE
 
-    lines = ["🏷 *Standart kategoriyalar:*\n"]
-    for cat, subs in CATEGORY_TREE.items():
-        emoji = reports.CATEGORY_EMOJI.get(cat, "📦")
-        lines.append(f"{emoji} *{cat}*: " + ", ".join(subs.keys()))
+    lines = []
+    if CATEGORY_TREE:
+        lines.append("🏷 *Standart kategoriyalar:*\n")
+        for cat, subs in CATEGORY_TREE.items():
+            emoji = reports.CATEGORY_EMOJI.get(cat, "📦")
+            lines.append(f"{emoji} *{cat}*: " + ", ".join(subs.keys()))
 
     user_id = update.effective_user.id
     custom = db.get_custom_categories(user_id)
     if custom:
-        lines.append("\n✨ *Siz qo'shgan kategoriyalar:*\n")
+        lines.append("🏷 *Sizning kategoriyalaringiz:*\n")
         seen = {}
         for cat, sub, _ in custom:
             seen.setdefault(cat, []).append(sub)
@@ -136,7 +138,7 @@ async def list_categories_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
             lines.append(f"📌 *{cat}*: " + ", ".join(subs))
     else:
         lines.append(
-            "\nO'zingizga xos kategoriya qo'shish uchun /yangikategoriya buyrug'ini ishlating."
+            "Hozircha kategoriya yo'q. /kategoriyayukla yoki /yangikategoriya bilan qo'shing."
         )
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)

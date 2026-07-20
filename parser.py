@@ -10,51 +10,10 @@ Misollar:
 """
 import re
 
-# Kategoriya -> subkategoriya -> kalit so'zlar (kichik harflarda)
-CATEGORY_TREE = {
-    "oziq-ovqat": {
-        "market/supermarket": ["market", "supermarket", "bozor", "produkt", "do'kon"],
-        "restoran/kafe": ["restoran", "kafe", "osh", "oshxona"],
-        "fastfood": ["fastfood", "fast food", "burger", "pitsa", "shashlik"],
-        "ichimlik": ["choy", "kofe", "coffee", "sув", "sharbat"],
-        "oziq-ovqat (umumiy)": ["oziq", "ovqat", "non", "go'sht", "sabzavot", "meva"],
-    },
-    "transport": {
-        "taksi": ["taxi", "taksi", "yandex", "bolt", "mytaxi"],
-        "jamoat transporti": ["avtobus", "metro", "poyezd", "marshrutka"],
-        "yonilg'i": ["benzin", "yonilg'i", "gaz kolonka", "zapravka"],
-        "transport (umumiy)": ["transport", "moshina", "mashina", "yo'l haqi"],
-    },
-    "kiyim-kechak": {
-        "kiyim": ["kiyim", "futbolka", "shim", "ko'ylak", "kurtka"],
-        "poyabzal": ["poyabzal", "krossovka", "botinka", "tufli"],
-        "aksessuar": ["sumka", "soat", "ko'zoynak", "aksessuar"],
-    },
-    "kommunal": {
-        "svet/elektr": ["svet", "elektr"],
-        "gaz": ["gaz"],
-        "suv": ["suv ta'minoti", "suv haqi"],
-        "internet/aloqa": ["internet", "wifi", "telefon", "aloqa"],
-        "ijara": ["ijara", "kvartira haqi"],
-        "kommunal (umumiy)": ["kommunal"],
-    },
-    "sog'liq": {
-        "dorixona": ["dori", "dorixona"],
-        "shifokor": ["shifokor", "vrach", "klinika", "kasalxona", "stomatolog"],
-        "sog'liq (umumiy)": ["sog'liq", "tibbiyot"],
-    },
-    "ko'ngilochar": {
-        "kino/teatr": ["kino", "teatr", "konsert"],
-        "sayohat": ["sayohat", "dam olish", "safar"],
-        "o'yin-kulgi": ["o'yin", "oyin", "klub", "bar"],
-        "sovg'a": ["sovg'a", "gift"],
-    },
-    "ta'lim": {
-        "kitob": ["kitob"],
-        "kurs/repetitor": ["kurs", "repetitor"],
-        "ta'lim (umumiy)": ["ta'lim", "maktab", "universitet"],
-    },
-}
+# Standart kategoriyalar o'chirildi — endi faqat foydalanuvchi o'zi
+# /kategoriyayukla yoki /yangikategoriya orqali qo'shgan kategoriyalar
+# ishlatiladi.
+CATEGORY_TREE = {}
 
 MULTIPLIERS = {
     "ming": 1_000,
