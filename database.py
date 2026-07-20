@@ -154,6 +154,56 @@ def get_custom_categories_grouped(user_id: int, kind: str = CHIQIM):
     return grouped
 
 
+def get_subcategory_keywords(user_id: int, category: str, subcategory: str, kind: str = CHIQIM):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT keywords FROM custom_categories WHERE user_id = ? AND category = ? "
+            "AND subcategory = ? AND kind = ?",
+            (user_id, category.strip(), subcategory.strip(), kind),
+        ).fetchone()
+        return row["keywords"].split(",") if row else []
+
+
+def rename_subcategory(user_id: int, category: str, old_sub: str, new_sub: str, kind: str = CHIQIM) -> bool:
+    """Faqat bitta subkategoriya nomini o'zgartiradi (kategoriya o'zgarmaydi)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE custom_categories SET subcategory = ? "
+            "WHERE user_id = ? AND category = ? AND subcategory = ? AND kind = ?",
+            (new_sub.strip(), user_id, category.strip(), old_sub.strip(), kind),
+        )
+        if cur.rowcount > 0:
+            conn.execute(
+                "UPDATE expenses SET subcategory = ? "
+                "WHERE user_id = ? AND category = ? AND subcategory = ? AND kind = ?",
+                (new_sub.strip(), user_id, category.strip(), old_sub.strip(), kind),
+            )
+            return True
+        return False
+
+
+def update_subcategory_keywords(user_id: int, category: str, subcategory: str, keywords: list, kind: str = CHIQIM) -> bool:
+    kw_str = ",".join(k.strip().lower() for k in keywords if k.strip())
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE custom_categories SET keywords = ? "
+            "WHERE user_id = ? AND category = ? AND subcategory = ? AND kind = ?",
+            (kw_str, user_id, category.strip(), subcategory.strip(), kind),
+        )
+        return cur.rowcount > 0
+
+
+def delete_subcategory(user_id: int, category: str, subcategory: str, kind: str = CHIQIM) -> bool:
+    """Faqat bitta subkategoriyani o'chiradi (butun kategoriyani emas)."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM custom_categories WHERE user_id = ? AND category = ? "
+            "AND subcategory = ? AND kind = ?",
+            (user_id, category.strip(), subcategory.strip(), kind),
+        )
+        return cur.rowcount > 0
+
+
 # ---- Tranzaksiyalar (chiqim va kirim uchun umumiy) ----
 
 def add_expense(user_id: int, amount: float, category: str, subcategory: str, note: str,

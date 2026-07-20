@@ -73,6 +73,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 CAT_NAME, SUBCAT_NAME, KEYWORDS = range(3)
 BULK_IMPORT = 3
 DAROMAD_TEXT = 4
+EDIT_INPUT = 5
 
 
 # ============================================================
@@ -151,6 +152,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏷 *Kirim kategoriyalari:*\n"
         "   /daromadkategoriyalar, /yangidaromadkategoriya,\n"
         "   /daromadkategoriyayukla, /daromadkategoriyanomi, /daromadkategoriyaochir\n\n"
+        "✏️ /tahrirlash — mavjud kategoriya/subkategoriyani tugmalar orqali "
+        "tahrirlash (nomini o'zgartirish, kalit so'zlarini yangilash, o'chirish)\n\n"
         "🗓 Har oyning 1-sanasida, o'tgan oy hisoboti avtomatik yuboriladi.\n"
         "❓ Kategoriya aniqlanmasa, bot tugmalar orqali tanlashni so'raydi."
     )
@@ -445,6 +448,161 @@ async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ============================================================
+#  Mavjud kategoriya/subkategoriyani tahrirlash (/tahrirlash)
+#  Oqim: kind tanlash -> kategoriya tanlash -> subkategoriya tanlash
+#        -> amal tanlash (nomi/kalit so'z/o'chirish) -> (kerak bo'lsa matn kiritish)
+# ============================================================
+
+async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("📊 Chiqim kategoriyasi", callback_data="edk:chiqim")],
+        [InlineKeyboardButton("💵 Kirim kategoriyasi", callback_data="edk:kirim")],
+    ]
+    await update.message.reply_text(
+        "✏️ Qaysi turdagi kategoriyani tahrirlaymiz?",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def edit_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data
+
+    # 1-qadam: kind tanlandi -> kategoriyalar ro'yxati
+    if data.startswith("edk:"):
+        kind = data.split(":", 1)[1]
+        grouped = db.get_custom_categories_grouped(user_id, kind=kind)
+        if not grouped:
+            await query.edit_message_text("Hozircha bu turda tahrirlanadigan kategoriya yo'q.")
+            return
+        context.user_data["edit_kind"] = kind
+        context.user_data["edit_cats"] = list(grouped.keys())
+        buttons = [
+            [InlineKeyboardButton(f"📌 {c}", callback_data=f"edc:{i}")]
+            for i, c in enumerate(context.user_data["edit_cats"])
+        ]
+        await query.edit_message_text("Qaysi kategoriya?", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    # 2-qadam: kategoriya tanlandi -> subkategoriyalar ro'yxati
+    if data.startswith("edc:"):
+        idx = int(data.split(":", 1)[1])
+        cats = context.user_data.get("edit_cats", [])
+        if idx >= len(cats):
+            await query.edit_message_text("❌ Xatolik yuz berdi, qaytadan /tahrirlash bosing.")
+            return
+        category = cats[idx]
+        kind = context.user_data.get("edit_kind", CHIQIM)
+        grouped = db.get_custom_categories_grouped(user_id, kind=kind)
+        subs = grouped.get(category, [])
+        context.user_data["edit_category"] = category
+        context.user_data["edit_subs"] = subs
+        buttons = [
+            [InlineKeyboardButton(s, callback_data=f"eds:{i}")] for i, s in enumerate(subs)
+        ]
+        await query.edit_message_text(
+            f"🏷 *{category}* — qaysi subkategoriyani tahrirlaymiz?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    # 3-qadam: subkategoriya tanlandi -> amal tanlash
+    if data.startswith("eds:"):
+        idx = int(data.split(":", 1)[1])
+        subs = context.user_data.get("edit_subs", [])
+        if idx >= len(subs):
+            await query.edit_message_text("❌ Xatolik yuz berdi, qaytadan /tahrirlash bosing.")
+            return
+        subcategory = subs[idx]
+        context.user_data["edit_subcategory"] = subcategory
+        buttons = [
+            [InlineKeyboardButton("✏️ Nomini o'zgartirish", callback_data="eda:rename")],
+            [InlineKeyboardButton("🔑 Kalit so'zlarni o'zgartirish", callback_data="eda:keywords")],
+            [InlineKeyboardButton("🗑 O'chirish", callback_data="eda:delete")],
+        ]
+        category = context.user_data.get("edit_category")
+        await query.edit_message_text(
+            f"🏷 *{category}* → *{subcategory}*\nNima qilamiz?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    # 4-qadam: amal tanlandi
+    if data.startswith("eda:"):
+        action = data.split(":", 1)[1]
+        category = context.user_data.get("edit_category")
+        subcategory = context.user_data.get("edit_subcategory")
+        kind = context.user_data.get("edit_kind", CHIQIM)
+
+        if action == "delete":
+            ok = db.delete_subcategory(user_id, category, subcategory, kind=kind)
+            if ok:
+                await query.edit_message_text(f"✅ \"{subcategory}\" o'chirildi.")
+            else:
+                await query.edit_message_text("❌ O'chirishda xatolik.")
+            _clear_edit_state(context)
+            return
+
+        context.user_data["edit_action"] = action
+        if action == "rename":
+            await query.edit_message_text(
+                f"✏️ \"{subcategory}\" uchun yangi nom yozing:"
+            )
+        elif action == "keywords":
+            current = db.get_subcategory_keywords(user_id, category, subcategory, kind=kind)
+            await query.edit_message_text(
+                f"🔑 Joriy kalit so'zlar: {', '.join(current)}\n\n"
+                "Yangi kalit so'zlarni vergul bilan yozing (eskilarini butunlay almashtiradi):"
+            )
+        context.user_data["awaiting_edit_input"] = True
+        return
+
+
+def _clear_edit_state(context: ContextTypes.DEFAULT_TYPE):
+    for k in ("edit_kind", "edit_cats", "edit_category", "edit_subs", "edit_subcategory",
+              "edit_action", "awaiting_edit_input"):
+        context.user_data.pop(k, None)
+
+
+async def edit_text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Agar foydalanuvchi tahrirlash uchun matn kiritishi kutilayotgan bo'lsa,
+    shu yerda qayta ishlanadi. True qaytarsa — xabar band qilingan (boshqa
+    handlerlar ishlamasligi kerak)."""
+    if not context.user_data.get("awaiting_edit_input"):
+        return False
+
+    user_id = update.effective_user.id
+    category = context.user_data.get("edit_category")
+    subcategory = context.user_data.get("edit_subcategory")
+    kind = context.user_data.get("edit_kind", CHIQIM)
+    action = context.user_data.get("edit_action")
+    text = update.message.text.strip()
+
+    if action == "rename":
+        ok = db.rename_subcategory(user_id, category, subcategory, text, kind=kind)
+        if ok:
+            await update.message.reply_text(
+                f"✅ \"{subcategory}\" → \"{text}\" deb o'zgartirildi.", reply_markup=MAIN_KEYBOARD
+            )
+        else:
+            await update.message.reply_text("❌ Xatolik yuz berdi.", reply_markup=MAIN_KEYBOARD)
+    elif action == "keywords":
+        keywords = text.split(",")
+        ok = db.update_subcategory_keywords(user_id, category, subcategory, keywords, kind=kind)
+        if ok:
+            await update.message.reply_text("✅ Kalit so'zlar yangilandi.", reply_markup=MAIN_KEYBOARD)
+        else:
+            await update.message.reply_text("❌ Xatolik yuz berdi.", reply_markup=MAIN_KEYBOARD)
+
+    _clear_edit_state(context)
+    return True
+
+
+# ============================================================
 #  Kategoriya/subkategoriya tugmalar orqali tanlash
 # ============================================================
 
@@ -590,6 +748,10 @@ async def daromad_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+
+    # Agar foydalanuvchi /tahrirlash oqimida matn kiritishi kutilayotgan bo'lsa
+    if await edit_text_input_handler(update, context):
+        return
 
     if text == "📊 Oylik hisobot":
         await monthly_cmd(update, context)
@@ -778,10 +940,12 @@ def main():
     app.add_handler(CommandHandler("daromadkategoriyaochir", delete_income_category_cmd))
     app.add_handler(CommandHandler("daromadkategoriyanomi", rename_income_category_cmd))
     app.add_handler(CommandHandler("avtomatiksinov", test_monthly_report_cmd))
+    app.add_handler(CommandHandler("tahrirlash", edit_start))
     app.add_handler(conv_handler)
     app.add_handler(income_conv_handler)
     app.add_handler(bulk_import_handler)
     app.add_handler(bulk_import_income_handler)
+    app.add_handler(CallbackQueryHandler(edit_button_handler, pattern=r"^ed[kcsa]:"))
     app.add_handler(CallbackQueryHandler(category_button_handler))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
