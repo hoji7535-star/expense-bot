@@ -62,8 +62,9 @@ logger = logging.getLogger(__name__)
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["📊 Oylik hisobot", "📆 Yillik hisobot"],
-        ["🏷 Kategoriyalar", "💵 Daromad qo'shish"],
-        ["↩️ Oxirgisini o'chirish", "ℹ️ Yordam"],
+        ["📈 Oylararo solishtirish", "🏷 Kategoriyalar"],
+        ["💵 Daromad qo'shish", "↩️ Oxirgisini o'chirish"],
+        ["ℹ️ Yordam"],
     ],
     resize_keyboard=True,
 )
@@ -141,6 +142,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   yoki oddiygina: `+500000 pensiya` (boshida \"+\" bilan)\n\n"
         "📊 /oylik — joriy oy hisoboti (chiqim + kirim + balans + diagramma)\n"
         "📆 /yillik — joriy yil hisoboti\n"
+        "📈 /solishtir — joriy oyni oldingi oy bilan solishtirish (matn + diagramma)\n"
         "↩️ /ochirish — oxirgi chiqimni o'chirish\n"
         "↩️ /daromadochirish — oxirgi kirimni o'chirish\n\n"
         "🏷 *Chiqim kategoriyalari:*\n"
@@ -189,6 +191,23 @@ async def yearly_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     income_chart = reports.yearly_chart(user_id, now.year, kind=KIRIM)
     if income_chart:
         await update.message.reply_photo(photo=income_chart, caption="💵 Kirimlar taqsimoti")
+
+
+async def compare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now()
+    user_id = update.effective_user.id
+
+    text = reports.compare_report(user_id, now.year, now.month, kind=CHIQIM)
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+    chart = reports.compare_chart(user_id, now.year, now.month, kind=CHIQIM)
+    if chart:
+        await update.message.reply_photo(photo=chart, caption="📊 Chiqim: oylararo solishtiruv")
+
+    income_text = reports.compare_report(user_id, now.year, now.month, kind=KIRIM)
+    await update.message.reply_text(income_text, parse_mode="Markdown")
+    income_chart = reports.compare_chart(user_id, now.year, now.month, kind=KIRIM)
+    if income_chart:
+        await update.message.reply_photo(photo=income_chart, caption="💵 Kirim: oylararo solishtiruv")
 
 
 async def delete_last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -578,6 +597,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📆 Yillik hisobot":
         await yearly_cmd(update, context)
         return
+    if text == "📈 Oylararo solishtirish":
+        await compare_cmd(update, context)
+        return
     if text == "↩️ Oxirgisini o'chirish":
         await delete_last_cmd(update, context)
         return
@@ -745,6 +767,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("oylik", monthly_cmd))
     app.add_handler(CommandHandler("yillik", yearly_cmd))
+    app.add_handler(CommandHandler("solishtir", compare_cmd))
     app.add_handler(CommandHandler("ochirish", delete_last_cmd))
     app.add_handler(CommandHandler("daromadochirish", delete_last_income_cmd))
     app.add_handler(CommandHandler("daromad", daromad_cmd))

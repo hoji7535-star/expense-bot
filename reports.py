@@ -190,3 +190,89 @@ def yearly_chart(user_id: int, year: int, kind: str = CHIQIM):
     start, end = year_range(year)
     suffix = " (kirim)" if kind == KIRIM else " (chiqim)"
     return generate_pie_chart(user_id, start, end, f"{year}-yil{suffix}", kind=kind)
+
+
+# ---- Oylararo solishtirish (joriy oy vs oldingi oy) ----
+
+def compare_report(user_id: int, year: int, month: int, kind: str = CHIQIM) -> str:
+    label = "Kirim" if kind == KIRIM else "Chiqim"
+    icon = "💵" if kind == KIRIM else "📊"
+
+    cur_start, cur_end = month_range(year, month)
+    py, pm = prev_month(year, month)
+    prev_start, prev_end = month_range(py, pm)
+
+    cur_rows = {r["category"]: r["total"] for r in db.get_summary_by_category(user_id, cur_start, cur_end, kind=kind)}
+    prev_rows = {r["category"]: r["total"] for r in db.get_summary_by_category(user_id, prev_start, prev_end, kind=kind)}
+
+    all_categories = sorted(set(cur_rows) | set(prev_rows), key=lambda c: cur_rows.get(c, 0), reverse=True)
+    if not all_categories:
+        return f"{icon} *{OY_NOMLARI[month-1]} vs {OY_NOMLARI[pm-1]} — {label} solishtiruvi*\n\nMa'lumot yo'q."
+
+    lines = [f"{icon} *{OY_NOMLARI[month-1]} {year} vs {OY_NOMLARI[pm-1]} {py} — {label} solishtiruvi*\n"]
+    cur_total = 0
+    prev_total = 0
+    for cat in all_categories:
+        cur_val = cur_rows.get(cat, 0)
+        prev_val = prev_rows.get(cat, 0)
+        cur_total += cur_val
+        prev_total += prev_val
+        diff = cur_val - prev_val
+        emoji = CATEGORY_EMOJI.get(cat, "📌")
+        if diff > 0:
+            trend = f"🔺 +{_fmt(diff)}"
+        elif diff < 0:
+            trend = f"🔻 {_fmt(diff)}"
+        else:
+            trend = "➖ 0"
+        lines.append(
+            f"{emoji} *{cat}*: {_fmt(cur_val)} so'm (avval: {_fmt(prev_val)}) {trend}"
+        )
+
+    total_diff = cur_total - prev_total
+    total_trend = f"🔺 +{_fmt(total_diff)}" if total_diff > 0 else (f"🔻 {_fmt(total_diff)}" if total_diff < 0 else "➖ 0")
+    lines.append(f"\n💰 *Jami:* {_fmt(cur_total)} so'm (avval: {_fmt(prev_total)}) {total_trend}")
+    return "\n".join(lines)
+
+
+def compare_chart(user_id: int, year: int, month: int, kind: str = CHIQIM):
+    """Joriy va oldingi oyni kategoriya bo'yicha ustunli diagrammada solishtiradi."""
+    cur_start, cur_end = month_range(year, month)
+    py, pm = prev_month(year, month)
+    prev_start, prev_end = month_range(py, pm)
+
+    cur_rows = {r["category"]: r["total"] for r in db.get_summary_by_category(user_id, cur_start, cur_end, kind=kind)}
+    prev_rows = {r["category"]: r["total"] for r in db.get_summary_by_category(user_id, prev_start, prev_end, kind=kind)}
+
+    all_categories = sorted(set(cur_rows) | set(prev_rows), key=lambda c: cur_rows.get(c, 0), reverse=True)
+    if not all_categories:
+        return None
+
+    prev_values = [prev_rows.get(c, 0) for c in all_categories]
+    cur_values = [cur_rows.get(c, 0) for c in all_categories]
+
+    fig, ax = plt.subplots(figsize=(7, 5), facecolor="#1e1e2e")
+    ax.set_facecolor("#1e1e2e")
+
+    x = range(len(all_categories))
+    width = 0.35
+    ax.bar([i - width / 2 for i in x], prev_values, width, label=f"{OY_NOMLARI[pm-1]}", color="#748FFC")
+    ax.bar([i + width / 2 for i in x], cur_values, width, label=f"{OY_NOMLARI[month-1]}", color="#FF6B6B")
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(all_categories, color="white", rotation=30, ha="right", fontsize=9)
+    ax.tick_params(colors="white")
+    for spine in ax.spines.values():
+        spine.set_color("#444")
+    ax.set_ylabel("so'm", color="white")
+    label = "Kirim" if kind == KIRIM else "Chiqim"
+    ax.set_title(f"{label}: oylararo solishtiruv", color="white", fontsize=13, fontweight="bold")
+    legend = ax.legend(facecolor="#1e1e2e", edgecolor="#444")
+    for text in legend.get_texts():
+        text.set_color("white")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
