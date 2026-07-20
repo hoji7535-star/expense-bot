@@ -136,9 +136,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💬 *Xarajat (chiqim)* — matn yoki ovoz bilan yozing:\n"
         "   `Muhammad Umar dori 5000`\n"
         "   `Avto benzin 100 ming`\n\n"
-        "💵 *Daromad (kirim)* — `/daromad` buyrug'i bilan:\n"
+        "💵 *Daromad (kirim)* — ikki xil usulda kiritish mumkin:\n"
         "   `/daromad pensiya 500000`\n"
-        "   `/daromad taksi 300 ming`\n\n"
+        "   yoki oddiygina: `+500000 pensiya` (boshida \"+\" bilan)\n\n"
         "📊 /oylik — joriy oy hisoboti (chiqim + kirim + balans + diagramma)\n"
         "📆 /yillik — joriy yil hisoboti\n"
         "↩️ /ochirish — oxirgi chiqimni o'chirish\n"
@@ -586,7 +586,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "💵 Daromad qo'shish":
         await update.message.reply_text(
-            "Daromadni shunday yozing:\n`/daromad pensiya 500000`",
+            "Daromadni shunday yozing:\n"
+            "`/daromad pensiya 500000`\n"
+            "yoki oddiygina: `+500000 pensiya`",
             parse_mode="Markdown",
         )
         return
@@ -597,6 +599,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _looks_like_bulk_category_list(text):
         result_text = await _do_bulk_import(update.effective_user.id, text, CHIQIM)
         await update.message.reply_text(result_text, reply_markup=MAIN_KEYBOARD)
+        return
+
+    # "+" bilan boshlansa — bu DAROMAD (kirim), masalan "+500000 pensiya"
+    if text.startswith("+"):
+        income_text = text[1:].strip()
+        if not income_text:
+            await update.message.reply_text(
+                "❌ \"+\" dan keyin summa va izoh yozing, masalan: `+500000 pensiya`",
+                parse_mode="Markdown",
+            )
+            return
+        await _register_transaction(update, context, income_text, source="text", kind=KIRIM)
         return
 
     await _register_transaction(update, context, text, source="text", kind=CHIQIM)
