@@ -3,10 +3,18 @@ database.py — SQLite orqali xarajat (chiqim) va daromad (kirim)
 ma'lumotlarini saqlash va o'qish uchun modul.
 """
 import sqlite3
+import os
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = "expenses.db"
+# DB_PATH atrof-muhit o'zgaruvchisi orqali beriladi — Railway'da doimiy
+# "Volume" ulanganda shu yerga ko'rsatiladi (masalan /data/expenses.db),
+# aks holda joriy papkada saqlanadi (lokal ishga tushirish uchun).
+DB_PATH = os.getenv("DB_PATH", "expenses.db")
+
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 CHIQIM = "chiqim"
 KIRIM = "kirim"
