@@ -1,8 +1,15 @@
 """
-reports.py — Oylik va yillik hisobotlarni matn ko'rinishida shakllantirish.
+reports.py — Oylik va yillik hisobotlarni matn va diagramma ko'rinishida
+shakllantirish.
 """
+import io
 from datetime import datetime
 from calendar import monthrange
+
+import matplotlib
+matplotlib.use("Agg")  # server muhitida ekran kerak emas
+import matplotlib.pyplot as plt
+
 import database as db
 
 CATEGORY_EMOJI = {
@@ -15,6 +22,49 @@ CATEGORY_EMOJI = {
     "ta'lim": "📚",
     "boshqa": "📦",
 }
+
+CATEGORY_COLORS = [
+    "#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA94D",
+    "#A78BFA", "#F783AC", "#63E6BE", "#FFD43B",
+    "#748FFC", "#FF922B",
+]
+
+
+def generate_pie_chart(user_id: int, start: datetime, end: datetime, title: str):
+    """
+    Kategoriyalar bo'yicha doira diagramma yasaydi.
+    Xarajat bo'lmasa None qaytaradi, aks holda PNG rasm baytlarini (BytesIO).
+    """
+    rows = db.get_summary_by_category(user_id, start, end)
+    if not rows:
+        return None
+
+    labels = [r["category"] for r in rows]
+    values = [r["total"] for r in rows]
+    colors = [CATEGORY_COLORS[i % len(CATEGORY_COLORS)] for i in range(len(labels))]
+
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor="#1e1e2e")
+    ax.set_facecolor("#1e1e2e")
+    wedges, texts, autotexts = ax.pie(
+        values,
+        labels=labels,
+        colors=colors,
+        autopct="%1.0f%%",
+        startangle=90,
+        textprops={"color": "white", "fontsize": 11},
+        wedgeprops={"edgecolor": "#1e1e2e", "linewidth": 2},
+    )
+    for at in autotexts:
+        at.set_color("#1e1e2e")
+        at.set_fontweight("bold")
+    ax.set_title(title, color="white", fontsize=14, fontweight="bold", pad=20)
+    ax.axis("equal")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
 
 def _fmt(amount: float) -> str:
@@ -75,7 +125,22 @@ def monthly_report(user_id: int, year: int, month: int) -> str:
     return build_report(user_id, start, end, title)
 
 
+def monthly_chart(user_id: int, year: int, month: int):
+    start, end = month_range(year, month)
+    oy_nomlari = [
+        "Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
+        "Iyul", "Avgust", "Sentabr", "Oktabr", "Noyabr", "Dekabr",
+    ]
+    title = f"{oy_nomlari[month - 1]} {year}"
+    return generate_pie_chart(user_id, start, end, title)
+
+
 def yearly_report(user_id: int, year: int) -> str:
     start, end = year_range(year)
     title = f"{year}-yil bo'yicha hisobot"
     return build_report(user_id, start, end, title)
+
+
+def yearly_chart(user_id: int, year: int):
+    start, end = year_range(year)
+    return generate_pie_chart(user_id, start, end, f"{year}-yil")

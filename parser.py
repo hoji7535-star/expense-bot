@@ -91,9 +91,21 @@ def extract_amount(text: str):
     return best_value, best_span
 
 
-def extract_category(text: str):
-    """(category, subcategory) qaytaradi. Topilmasa ('boshqa', 'boshqa')."""
+def extract_category(text: str, custom_categories=None):
+    """(category, subcategory) qaytaradi. Topilmasa ('boshqa', 'boshqa').
+    custom_categories: [(category, subcategory, [keywords...]), ...] —
+    foydalanuvchi qo'shgan kategoriyalar birinchi navbatda tekshiriladi,
+    chunki ular standart ro'yxatdan ustunroq bo'lishi kerak.
+    """
     lowered = text.lower()
+
+    if custom_categories:
+        for category, subcat, keywords in custom_categories:
+            for kw in keywords:
+                kw = kw.strip()
+                if kw and kw in lowered:
+                    return category, subcat
+
     for category, subcats in CATEGORY_TREE.items():
         for subcat, keywords in subcats.items():
             for kw in keywords:
@@ -102,13 +114,13 @@ def extract_category(text: str):
     return "boshqa", "boshqa"
 
 
-def parse_expense_text(text: str):
+def parse_expense_text(text: str, custom_categories=None):
     """
     Matndan (amount, category, subcategory, note) qaytaradi.
     Agar summa topilmasa, amount = None bo'ladi.
     """
     amount, span = extract_amount(text)
-    category, subcategory = extract_category(text)
+    category, subcategory = extract_category(text, custom_categories)
 
     # Note sifatida summa raqamidan tashqari qolgan matnni olamiz
     if span:
