@@ -34,9 +34,54 @@ from telegram.ext import (
 )
 
 import database as db
+import re
 import reports
 import voice as voice_module
 from parser import parse_expense_text
+
+
+def _looks_like_bulk_category_list(text: str) -> bool:
+    """Matn 'Kategoriya: sub1, sub2, ...' formatidagi qatorlardan
+    iboratmi — shunga o'xshasa True. Bu tekshiruv suhbat holatidan
+    (ConversationHandler state) mustaqil ishlaydi, shuning uchun bot
+    qayta ishga tushgan taqdirda ham ro'yxatni to'g'ri tanib oladi."""
+    line_pattern = re.compile(r"^[^:]{2,40}:\s*[^,]+(,\s*[^,]+)+$")
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return False
+    matching = sum(1 for ln in lines if line_pattern.match(ln))
+    return matching >= 1 and matching >= len(lines) / 2
+
+
+async def _do_bulk_import(update: Update, user_id: int, raw_text: str) -> str:
+    """Ro'yxatni bazaga yozadi va xabar matnini qaytaradi."""
+    lines = raw_text.strip().splitlines()
+    added = []
+    errors = []
+
+    for line in lines:
+        line = line.strip()
+        if not line or ":" not in line:
+            if line:
+                errors.append(line)
+            continue
+        cat_part, subs_part = line.split(":", 1)
+        category = cat_part.strip()
+        subcats = [s.strip() for s in subs_part.split(",") if s.strip()]
+        if not category or not subcats:
+            errors.append(line)
+            continue
+        for sub in subcats:
+            db.add_custom_category(user_id, category, sub, [sub])
+            added.append(f"{category} → {sub}")
+
+    if not added:
+        return "❌ Hech qanday kategoriya qo'shilmadi. Format: `Kategoriya: sub1, sub2`"
+
+    summary = f"✅ {len(added)} ta subkategoriya qo'shildi."
+    if errors:
+        summary += f"\n⚠️ {len(errors)} qator formatga mos kelmadi va o'tkazib yuborildi."
+    return summary
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -259,7 +304,6 @@ async def bulk_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     raw_text = update.message.text.strip()
-    lines = raw_text.splitlines()
 
     # Agar hech qanday qatorda ":" bo'lmasa — bu kategoriya ro'yxati emas,
     # balki foydalanuvchi (ehtimol bilmasdan) oddiy xarajat yozgan.
@@ -272,37 +316,15 @@ async def bulk_import_receive(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _register_expense(update, context, raw_text, source="text")
         return ConversationHandler.END
 
-    added = []
-    errors = []
-
-    for line in lines:
-        line = line.strip()
-        if not line or ":" not in line:
-            if line:
-                errors.append(line)
-            continue
-        cat_part, subs_part = line.split(":", 1)
-        category = cat_part.strip()
-        subcats = [s.strip() for s in subs_part.split(",") if s.strip()]
-        if not category or not subcats:
-            errors.append(line)
-            continue
-        for sub in subcats:
-            db.add_custom_category(user_id, category, sub, [sub])
-            added.append(f"{category} → {sub}")
-
-    if not added:
+    result_text = await _do_bulk_import(update, user_id, raw_text)
+    if result_text.startswith("❌"):
         await update.message.reply_text(
-            "❌ Hech qanday kategoriya qo'shilmadi. Format: `Kategoriya: sub1, sub2`\n"
-            "Qayta urinib ko'ring yoki /bekor deb yozing.",
+            result_text + "\nQayta urinib ko'ring yoki /bekor deb yozing.",
             parse_mode="Markdown",
         )
         return BULK_IMPORT
 
-    summary = f"✅ {len(added)} ta subkategoriya qo'shildi.\n"
-    if errors:
-        summary += f"\n⚠️ {len(errors)} qator formatga mos kelmadi va o'tkazib yuborildi."
-    await update.message.reply_text(summary, reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(result_text, reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -444,6 +466,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "ℹ️ Yordam":
         await help_cmd(update, context)
+        return
+
+    # Stateless aniqlash: bu "Kategoriya: sub1, sub2" ro'yxatiga o'xshaydimi?
+    # Suhbat holatidan mustaqil ishlaydi — bot qayta ishga tushgan bo'lsa
+    # ham, /kategoriyayukla bosilmagan bo'lsa ham ishlaydi.
+    if _looks_like_bulk_category_list(text):
+        result_text = await _do_bulk_import(update, update.effective_user.id, text)
+        await update.message.reply_text(result_text, reply_markup=MAIN_KEYBOARD)
         return
 
     await _register_expense(update, context, text, source="text")
