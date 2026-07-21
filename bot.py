@@ -42,6 +42,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     filters,
+    PicklePersistence,
 )
 
 import database as db
@@ -1026,7 +1027,15 @@ def main():
 
     db.init_db()
 
-    app = Application.builder().token(TOKEN).build()
+    # Botning "kutish holatlari" (masalan tugma bosgandan keyin summa
+    # kutish) ham bazaviy fayl bilan bir xil doimiy diskda saqlanadi —
+    # shunda bot qayta ishga tushsa ham (yangilanish, restart) yarim
+    # qolgan amallar yo'qolmaydi.
+    persistence_dir = os.path.dirname(db.DB_PATH) or "."
+    persistence_path = os.path.join(persistence_dir, "bot_persistence.pickle")
+    persistence = PicklePersistence(filepath=persistence_path)
+
+    app = Application.builder().token(TOKEN).persistence(persistence).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("yangikategoriya", new_category_start)],
