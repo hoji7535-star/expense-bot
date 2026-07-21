@@ -956,6 +956,37 @@ async def _broadcast_monthly_report(context: ContextTypes.DEFAULT_TYPE, year: in
             logger.exception(f"Avtomatik hisobot yuborishda xato (user_id={user_id})")
 
 
+async def diagnostika_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bazaning holatini tekshirish uchun diagnostika."""
+    user_id = update.effective_user.id
+    db_path_env = os.getenv("DB_PATH", "(o'rnatilmagan, standart 'expenses.db' ishlatiladi)")
+    resolved_path = db.DB_PATH
+    exists = os.path.exists(resolved_path)
+    size = os.path.getsize(resolved_path) if exists else 0
+
+    chiqim_count = len(db.get_recent_expenses(user_id, kind=CHIQIM, limit=10000))
+    kirim_count = len(db.get_recent_expenses(user_id, kind=KIRIM, limit=10000))
+    custom_chiqim = len(db.get_custom_categories(user_id, kind=CHIQIM))
+    custom_kirim = len(db.get_custom_categories(user_id, kind=KIRIM))
+    all_users = db.get_all_users()
+
+    exists_label = "✅ Ha" if exists else "❌ Yoq"
+    text = (
+        f"🔧 *Diagnostika*\n\n"
+        f"DB\\_PATH (env): `{db_path_env}`\n"
+        f"Haqiqiy fayl yo'li: `{resolved_path}`\n"
+        f"Fayl mavjudmi: {exists_label}\n"
+        f"Fayl hajmi: {size} bayt\n\n"
+        f"Sizning yozuvlaringiz:\n"
+        f"  📊 Chiqim: {chiqim_count} ta\n"
+        f"  💵 Kirim: {kirim_count} ta\n"
+        f"  🏷 Chiqim kategoriya: {custom_chiqim} ta\n"
+        f"  🏷 Kirim kategoriya: {custom_kirim} ta\n\n"
+        f"Ro'yxatdan o'tgan foydalanuvchilar: {len(all_users)} ta"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def test_monthly_report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Avtomatik hisobotni qo'lda sinash uchun (faqat shu foydalanuvchiga yuboradi)."""
     now = datetime.now()
@@ -1041,6 +1072,7 @@ def main():
     app.add_handler(CommandHandler("daromadkategoriyaochir", delete_income_category_cmd))
     app.add_handler(CommandHandler("daromadkategoriyanomi", rename_income_category_cmd))
     app.add_handler(CommandHandler("avtomatiksinov", test_monthly_report_cmd))
+    app.add_handler(CommandHandler("diagnostika", diagnostika_cmd))
     app.add_handler(CommandHandler("tahrirlash", edit_start))
     app.add_handler(CommandHandler("miqdortahrir", amount_edit_start))
     app.add_handler(conv_handler)
