@@ -64,6 +64,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         ["📊 Oylik hisobot", "📆 Yillik hisobot"],
         ["📈 Oylararo solishtirish", "🏷 Kategoriyalar"],
         ["💵 Daromad qo'shish", "↩️ Oxirgisini o'chirish"],
+        ["✏️ Kategoriya tahrirlash", "💲 Miqdorni tahrirlash"],
         ["ℹ️ Yordam"],
     ],
     resize_keyboard=True,
@@ -862,6 +863,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if text == "📈 Oylararo solishtirish":
         await compare_cmd(update, context)
+        return
+    if text == "✏️ Kategoriya tahrirlash":
+        await edit_start(update, context)
+        return
+    if text == "💲 Miqdorni tahrirlash":
+        await amount_edit_start(update, context)
         return
     if text == "↩️ Oxirgisini o'chirish":
         await delete_last_cmd(update, context)
