@@ -153,7 +153,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "   /daromadkategoriyalar, /yangidaromadkategoriya,\n"
         "   /daromadkategoriyayukla, /daromadkategoriyanomi, /daromadkategoriyaochir\n\n"
         "✏️ /tahrirlash — mavjud kategoriya/subkategoriyani tugmalar orqali "
-        "tahrirlash (nomini o'zgartirish, kalit so'zlarini yangilash, o'chirish)\n\n"
+        "tahrirlash (nomini o'zgartirish, kalit so'zlarini yangilash, o'chirish)\n"
+        "💲 /miqdortahrir — kiritilgan yozuvning miqdorini (summasini) o'zgartirish\n\n"
         "🗓 Har oyning 1-sanasida, o'tgan oy hisoboti avtomatik yuboriladi.\n"
         "❓ Kategoriya aniqlanmasa, bot tugmalar orqali tanlashni so'raydi."
     )
@@ -603,6 +604,103 @@ async def edit_text_input_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 # ============================================================
+#  Kiritilgan yozuvning MIQDORINI tahrirlash (/miqdortahrir)
+#  Oqim: kind tanlash -> oxirgi yozuvlar ro'yxati -> yangi summa kiritish
+# ============================================================
+
+async def amount_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("📊 Chiqim", callback_data="amtk:chiqim")],
+        [InlineKeyboardButton("💵 Kirim", callback_data="amtk:kirim")],
+    ]
+    await update.message.reply_text(
+        "✏️ Qaysi turdagi yozuvning miqdorini o'zgartiramiz?",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+def _format_expense_button_label(row) -> str:
+    date_str = row["created_at"][:10]
+    return f"{date_str} | {row['category']}→{row['subcategory']} | {row['amount']:,.0f} so'm".replace(",", " ")
+
+
+async def amount_edit_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data
+
+    if data.startswith("amtk:"):
+        kind = data.split(":", 1)[1]
+        rows = db.get_recent_expenses(user_id, kind=kind, limit=10)
+        if not rows:
+            label = "kirim" if kind == KIRIM else "chiqim"
+            await query.edit_message_text(f"Hozircha hech qanday {label} yozuvi yo'q.")
+            return
+        context.user_data["amount_edit_kind"] = kind
+        context.user_data["amount_edit_rows"] = {str(r["id"]): dict(r) for r in rows}
+        buttons = [
+            [InlineKeyboardButton(_format_expense_button_label(r), callback_data=f"amte:{r['id']}")]
+            for r in rows
+        ]
+        await query.edit_message_text(
+            "Oxirgi 10 ta yozuv — qaysi birining miqdorini o'zgartiramiz?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    if data.startswith("amte:"):
+        expense_id = data.split(":", 1)[1]
+        rows = context.user_data.get("amount_edit_rows", {})
+        row = rows.get(expense_id)
+        if not row:
+            await query.edit_message_text("❌ Yozuv topilmadi, qayta /miqdortahrir bosing.")
+            return
+        context.user_data["amount_edit_id"] = int(expense_id)
+        context.user_data["awaiting_amount_input"] = True
+        await query.edit_message_text(
+            f"🏷 {row['category']} → {row['subcategory']}\n"
+            f"💰 Hozirgi miqdor: {row['amount']:,.0f} so'm\n\n".replace(",", " ") +
+            "Yangi miqdorni raqam bilan yozing:"
+        )
+        return
+
+
+async def amount_edit_text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Agar foydalanuvchidan yangi miqdor kutilayotgan bo'lsa, shu yerda
+    qayta ishlanadi. True qaytarsa — xabar band qilingan."""
+    if not context.user_data.get("awaiting_amount_input"):
+        return False
+
+    user_id = update.effective_user.id
+    expense_id = context.user_data.get("amount_edit_id")
+    text = update.message.text.strip().replace(" ", "").replace(",", "")
+
+    try:
+        new_amount = float(text)
+        if new_amount <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Iltimos, faqat musbat raqam yozing, masalan: `75000`", parse_mode="Markdown"
+        )
+        return True  # hali ham shu holatda qolamiz, band qilingan
+
+    ok = db.update_expense_amount(user_id, expense_id, new_amount)
+    for k in ("amount_edit_kind", "amount_edit_rows", "amount_edit_id", "awaiting_amount_input"):
+        context.user_data.pop(k, None)
+
+    if ok:
+        await update.message.reply_text(
+            f"✅ Miqdor {new_amount:,.0f} so'mga o'zgartirildi.".replace(",", " "),
+            reply_markup=MAIN_KEYBOARD,
+        )
+    else:
+        await update.message.reply_text("❌ Xatolik yuz berdi.", reply_markup=MAIN_KEYBOARD)
+    return True
+
+
+# ============================================================
 #  Kategoriya/subkategoriya tugmalar orqali tanlash
 # ============================================================
 
@@ -751,6 +849,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Agar foydalanuvchi /tahrirlash oqimida matn kiritishi kutilayotgan bo'lsa
     if await edit_text_input_handler(update, context):
+        return
+    # Agar foydalanuvchidan yozuv miqdorini yangilash kutilayotgan bo'lsa
+    if await amount_edit_text_input_handler(update, context):
         return
 
     if text == "📊 Oylik hisobot":
@@ -941,11 +1042,13 @@ def main():
     app.add_handler(CommandHandler("daromadkategoriyanomi", rename_income_category_cmd))
     app.add_handler(CommandHandler("avtomatiksinov", test_monthly_report_cmd))
     app.add_handler(CommandHandler("tahrirlash", edit_start))
+    app.add_handler(CommandHandler("miqdortahrir", amount_edit_start))
     app.add_handler(conv_handler)
     app.add_handler(income_conv_handler)
     app.add_handler(bulk_import_handler)
     app.add_handler(bulk_import_income_handler)
     app.add_handler(CallbackQueryHandler(edit_button_handler, pattern=r"^ed[kcsa]:"))
+    app.add_handler(CallbackQueryHandler(amount_edit_button_handler, pattern=r"^amt[ke]:"))
     app.add_handler(CallbackQueryHandler(category_button_handler))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

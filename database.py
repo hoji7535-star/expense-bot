@@ -269,3 +269,33 @@ def get_total(user_id: int, start: datetime, end: datetime, kind: str = CHIQIM) 
             (user_id, kind, start.isoformat(), end.isoformat()),
         ).fetchone()
         return row["total"]
+
+
+def get_recent_expenses(user_id: int, kind: str = CHIQIM, limit: int = 10):
+    """Oxirgi N ta yozuvni qaytaradi (eng yangisi birinchi)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, amount, category, subcategory, note, created_at FROM expenses "
+            "WHERE user_id = ? AND kind = ? ORDER BY id DESC LIMIT ?",
+            (user_id, kind, limit),
+        ).fetchall()
+        return rows
+
+
+def update_expense_amount(user_id: int, expense_id: int, new_amount: float) -> bool:
+    """Faqat shu foydalanuvchiga tegishli yozuvning miqdorini yangilaydi."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE expenses SET amount = ? WHERE id = ? AND user_id = ?",
+            (new_amount, expense_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_expense_by_id(user_id: int, expense_id: int):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM expenses WHERE id = ? AND user_id = ?",
+            (expense_id, user_id),
+        ).fetchone()
+        return row
