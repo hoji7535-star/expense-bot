@@ -79,13 +79,20 @@ def generate_pie_chart(user_id: int, start: datetime, end: datetime, title: str,
     values = [r["total"] for r in rows]
     colors = [CATEGORY_COLORS[i % len(CATEGORY_COLORS)] for i in range(len(labels))]
 
+    def make_autopct(vals):
+        total = sum(vals)
+        def autopct(pct):
+            amount = pct / 100 * total
+            return f"{pct:.0f}%\n{amount:,.0f} so'm".replace(",", " ")
+        return autopct
+
     fig, ax = plt.subplots(figsize=(6, 6), facecolor="#1e1e2e")
     ax.set_facecolor("#1e1e2e")
     wedges, texts, autotexts = ax.pie(
         values,
         labels=labels,
         colors=colors,
-        autopct="%1.0f%%",
+        autopct=make_autopct(values),
         startangle=90,
         textprops={"color": "white", "fontsize": 11},
         wedgeprops={"edgecolor": "#1e1e2e", "linewidth": 2},
@@ -93,6 +100,7 @@ def generate_pie_chart(user_id: int, start: datetime, end: datetime, title: str,
     for at in autotexts:
         at.set_color("#1e1e2e")
         at.set_fontweight("bold")
+        at.set_fontsize(9.5)
     ax.set_title(title, color="white", fontsize=14, fontweight="bold", pad=20)
     ax.axis("equal")
 
